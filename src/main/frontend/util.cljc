@@ -163,6 +163,13 @@
 
 #?(:cljs
    (do
+     (defn- server-mode*?
+       []
+       (and js/window
+            (or (gobj/get js/window "LOGSEQ_SERVER_GRAPH_DIR")
+                (gobj/get js/window "LOGSEQ_SERVER_MODE"))))
+     (def server-mode? (memoize server-mode*?))
+     
      (def nfs? (and (not (electron?))
                     (not (mobile-util/native-platform?))))
      (def web-platform? nfs?)

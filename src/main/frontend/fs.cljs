@@ -7,6 +7,7 @@
             [frontend.config :as config]
             [frontend.fs.memory-fs :as memory-fs]
             [frontend.fs.node :as node]
+            [frontend.fs.http-fs :as http-fs]
             [frontend.fs.protocol :as protocol]
             [frontend.state :as state]
             [frontend.util :as util]
@@ -17,6 +18,7 @@
 
 (defonce memory-backend (memory-fs/->MemoryFs))
 (defonce node-backend (node/->Node))
+(defonce http-backend (http-fs/->HttpFs))
 
 (defn- get-native-backend
   "Native FS backend of current platform"
@@ -33,7 +35,8 @@
         db-assets? (and
                     (config/db-based-graph? repo)
                     rpath
-                    (string/starts-with? rpath "assets/"))]
+                    (string/starts-with? rpath "assets/"))
+        server-mode? (util/server-mode?)]
     (cond
       (and db-assets? (util/electron?))
       node-backend
@@ -46,6 +49,10 @@
 
       (string/starts-with? dir "memory://")
       memory-backend
+
+      ;; Server mode: use HTTP backend for file operations
+      (and server-mode? (not (util/electron?)) (not bfs-local?))
+      http-backend
 
       (and (util/electron?) (not bfs-local?))
       node-backend

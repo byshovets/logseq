@@ -35,6 +35,21 @@
 <div id="root"></div>
 <script>window.user = null</script>
 <script>window.__LSP__HOST__ = true</script>
+<script>
+  // Inject server-side configuration from environment variable
+  // This allows the server to set LOGSEQ_SERVER_GRAPH_DIR at runtime
+  // The value can be provided via environment variable substitution or server-side injection
+  if (typeof window !== 'undefined' && window.LOGSEQ_SERVER_GRAPH_DIR === undefined) {
+    // For Docker/container deployments, this can be set via:
+    // envsubst or similar tools that replace {{LOGSEQ_SERVER_GRAPH_DIR}} at container startup
+    // Or the server can inject this script dynamically
+    var serverGraphDir = '{{LOGSEQ_SERVER_GRAPH_DIR}}';
+    if (serverGraphDir && serverGraphDir !== '{{LOGSEQ_SERVER_GRAPH_DIR}}') {
+      window.LOGSEQ_SERVER_GRAPH_DIR = serverGraphDir;
+      window.LOGSEQ_SERVER_MODE = true;
+    }
+  }
+</script>
 <script src="/static/js/magic_portal.js"></script>
 <script>let worker = new Worker('/static/js/worker.js')
   const portal = new MagicPortal(worker);

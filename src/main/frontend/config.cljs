@@ -7,6 +7,7 @@
             [frontend.util :as util]
             [goog.crypt :as crypt]
             [goog.crypt.Md5]
+            [goog.object :as gobj]
             [logseq.common.config :as common-config]
             [logseq.common.path :as path]
             [logseq.common.util :as common-util]
@@ -383,9 +384,12 @@
 (defn get-repo-dir
   [repo-url]
   (when repo-url
-    (let [db-based? (db-based-graph? repo-url)]
+    (let [db-based? (db-based-graph? repo-url)
+          server-mode? (util/server-mode?)
+          server-graph-dir (when server-mode?
+                             (gobj/get js/window "LOGSEQ_SERVER_GRAPH_DIR"))]
       (cond
-        (and (util/electron?) db-based-graph?)
+        (and (util/electron?) db-based?)
         (get-local-dir repo-url)
 
         db-based?
@@ -404,6 +408,10 @@
     ;; Special handling for demo graph
         (= repo-url demo-repo)
         "memory:///local"
+
+    ;; Server mode: use server graph dir for local file-based graphs
+        (and server-mode? server-graph-dir (local-file-based-graph? repo-url))
+        (path/path-join server-graph-dir (string/replace-first repo-url local-db-prefix ""))
 
     ;; nfs, browser-fs-access
     ;; Format: logseq_local_{dir-name}
