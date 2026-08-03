@@ -89,18 +89,28 @@
   [custom-url]
   (string/replace custom-url #"/+$" ""))
 
+(defn- self-host-origin
+  "In self-host builds the sync server is served from the page origin (single-origin
+   deploy), unless a custom URL or the local dev adapter (`db-sync-local?`) is configured.
+   Main thread only: workers receive sync URLs via `set-db-sync-config`."
+  []
+  (when (and self-host?
+             (not db-sync-local?)
+             (exists? js/window))
+    (.. js/window -location -origin)))
+
 (defn db-sync-ws-url
   "Return the WebSocket sync URL. Uses custom server when configured, otherwise the default."
   []
-  (if-let [custom (get-custom-sync-server-url)]
-    (custom-url->ws-url custom)
+  (if-let [base (or (get-custom-sync-server-url) (self-host-origin))]
+    (custom-url->ws-url base)
     default-db-sync-ws-url))
 
 (defn db-sync-http-base
   "Return the HTTP base URL for sync. Uses custom server when configured, otherwise the default."
   []
-  (if-let [custom (get-custom-sync-server-url)]
-    (custom-url->http-base custom)
+  (if-let [base (or (get-custom-sync-server-url) (self-host-origin))]
+    (custom-url->http-base base)
     default-db-sync-http-base))
 
 (defn get-custom-publish-server-url
