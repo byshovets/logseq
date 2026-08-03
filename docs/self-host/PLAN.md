@@ -930,9 +930,9 @@ touched by 1-3 stable, flag-gated lines each. No touch to `events/ui.cljs`; no
 touch to the churny sync/storage/checksum server files.
 
 **Footprint re-audit (2026-08-03, after the review rounds).** The accepted
-irreducible core grew from ~4 to 7 flag-gated touch points, each carrying a
-P1 correctness fix; everything stays inert-by-default and the biggest single
-inline edit is ~5 lines:
+irreducible core grew from ~4 to 9 flag-gated touch points, each carrying a
+correctness fix from review; everything stays inert-by-default and the biggest
+single inline edit is ~5 lines:
 - `config.cljs`: the SELF-HOST define (additive) + a 2-line body edit in each
   of `db-sync-ws-url`/`db-sync-http-base` (origin default). These two fns
   belong to the recently-shipped custom-sync-server feature - the churniest
@@ -944,9 +944,13 @@ inline edit is ~5 lines:
   now backed by a compile-time `SELF-HOST` goog-define (additive block) so
   whole-config replacements can't re-enable e2ee.
 - `handler.cljs` (require + 2-line hook), `handler/events/rtc.cljs` (e2ee
-  password early-branch), `shadow-cljs.edn` (2 additive define lines),
-  `deps/db-sync` `worker/auth.cljs` + `node/server.cljs` (the no-auth seam),
-  dicts `en`/`zh-CN` (additive `:self-host/*` entries) - all as designed.
+  password early-branch), `handler/user.cljs` (flag-gated logout no-op - it
+  wipes localStorage and self-host has no login to return to),
+  `shadow-cljs.edn` (2 additive define lines), `deps/db-sync`
+  `worker/auth.cljs` + `node/server.cljs` (the no-auth seam) +
+  `platform/node.cljs` (X-Forwarded-Proto/Host-aware request origin, so
+  absolute URLs survive the HTTPS proxy), dicts `en`/`zh-CN` (additive
+  `:self-host/*` entries).
 - **Semantic couplings inside the fork-owned namespace** (no git conflicts,
   but rebase checkpoints): the `flows/*current-login-user` reset (the atom has
   a schema validator - guarded by try/catch), the `:rtc/graphs` entry shape,

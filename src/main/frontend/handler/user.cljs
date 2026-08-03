@@ -309,12 +309,15 @@
           {:id-token id-token :access-token access-token :refresh-token refresh-token})))))
 
 (defn logout []
-  (clear-e2ee-password!)
-  (clear-tokens)
-  (.clear js/localStorage)
-  (state/clear-user-info!)
-  (state/pub-event! [:user/logout])
-  (reset! flows/*current-login-user :logout))
+  ;; self-host has one fixed local session and no login to return to;
+  ;; the localStorage wipe below would destroy graph/theme/sync preferences
+  (when-not config/self-host?
+    (clear-e2ee-password!)
+    (clear-tokens)
+    (.clear js/localStorage)
+    (state/clear-user-info!)
+    (state/pub-event! [:user/logout])
+    (reset! flows/*current-login-user :logout)))
 
 (defn upgrade []
   (let [base-upgrade-url "https://logseqdemo.lemonsqueezy.com/checkout/buy/13e194b5-c927-41a8-af58-ed1a36d6000d"

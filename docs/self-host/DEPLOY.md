@@ -143,7 +143,12 @@ over `wss://<origin>/sync/<graph-id>`. The proxy must:
    `proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";`),
 2. run forward-auth on the upgrade request too - the session cookie rides the
    same-origin WS handshake, so cookie-based forward-auth passes it; header
-   -injection schemes that rely on redirects will break it.
+   -injection schemes that rely on redirects will break it,
+3. preserve the external origin in `Host` and `X-Forwarded-Proto` - the
+   backend embeds absolute URLs (e.g. the snapshot stream URL) derived from
+   them, and an `http://` URL on an `https://` page is blocked as mixed
+   content. Caddy does both by default; nginx needs
+   `proxy_set_header Host $host; proxy_set_header X-Forwarded-Proto $scheme;`.
 
 Verify after setup: log in, open the app, and check the sync indicator
 connects (or `wscat -H "Cookie: <session>" wss://logseq.example.com/sync/test`

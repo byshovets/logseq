@@ -107,11 +107,14 @@ APP_URL_B=http://localhost:8080/ DB_SYNC_DATA_DIR=<data dir> node scripts/self-h
   + one-line boot hook), guards in `handler/db_based/sync.cljs` (e2ee, rsa-skip,
   and the graph-identity check in `should-start-rtc?`) +
   `worker/sync/upload.cljs` (e2ee via a compile-time define) +
-  `handler/events/rtc.cljs` (password prompt early-branch), additive
-  `:self-host/*` dict entries (`en`/`zh-CN`), and the server seam in
-  `deps/db-sync/.../worker/auth.cljs` + `node/server.cljs`. **`events/ui.cljs`
-  and the root `Dockerfile` are untouched.** Full rationale + the footprint
-  re-audit: PLAN.md 11.
+  `handler/events/rtc.cljs` (password prompt early-branch), `handler/user.cljs`
+  (logout no-op: it would wipe localStorage incl. graph/theme/sync prefs, and a
+  single-user deploy has no login to return to), additive `:self-host/*` dict
+  entries (`en`/`zh-CN`), and the server seam in
+  `deps/db-sync/.../worker/auth.cljs` + `node/server.cljs` +
+  `platform/node.cljs` (per-request forwarded-origin so absolute URLs stay
+  https behind the proxy). **`events/ui.cljs` and the root `Dockerfile` are
+  untouched.** Full rationale + the footprint re-audit: PLAN.md 11.
 
 ## What's next
 1. **Deploy it** (ops-side, [DEPLOY.md](./DEPLOY.md)): home server container +

@@ -51,7 +51,9 @@
                    protocol)]
       {:scheme scheme
        :host (.-host url)})
-    {:scheme "http"}))
+    ;; no fixed base: derive per request (Host + X-Forwarded-*), so one server
+    ;; reached through several proxies/origins builds correct absolute URLs
+    {}))
 
 (defn- access-allowed?
   [env graph-id request]

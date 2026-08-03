@@ -190,15 +190,18 @@
        (= (str (ldb/get-graph-rtc-uuid (db/get-db repo)))
           (str (:GraphUUID remote)))))
 
-(defn- <with-graph-upload-lock
-  "Serialize recovery + upload per graph across this browser's tabs via the Web
-   Locks API - a liveness-safe lease: the lock is auto-released when the
-   holding tab dies, unlike any age/timestamp heuristic. Falls back to running
-   directly when the API is unavailable (the per-tab :rtc/uploading? guard
-   still applies)."
-  [repo thunk]
+(defn- <with-upload-lock
+  "Serialize recovery + upload across this browser's tabs AND graphs via one
+   Web Lock - a liveness-safe lease: the lock is auto-released when the holding
+   tab dies, unlike any age/timestamp heuristic. One global lock (not
+   per-graph): uploads of different graphs share the :rtc/uploading? state, so
+   an unserialized second graph would see it set and skip its upload forever;
+   queued behind the lock it proceeds once the first upload finishes. Falls
+   back to running directly when the API is unavailable (the per-tab
+   :rtc/uploading? guard still applies)."
+  [thunk]
   (if (and (exists? js/navigator) (.-locks js/navigator))
-    (js/navigator.locks.request (str "logseq-self-host-upload-" repo)
+    (js/navigator.locks.request "logseq-self-host-upload"
                                 (fn [_lock] (thunk)))
     (thunk)))
 
@@ -286,7 +289,7 @@
       (if-not db-ready?
         (log/info :self-host/auto-upload-no-db-conn repo)
         (when (= repo (state/get-current-repo))
-          (-> (<with-graph-upload-lock repo #(<recover-and-upload! repo))
+          (-> (<with-upload-lock #(<recover-and-upload! repo))
               (p/catch
                (fn [e]
                  (log/error :self-host/auto-upload-failed {:repo repo :error e})
@@ -373,14 +376,3 @@
          (<self-host-auto-open!))
         (p/catch (fn [e] (log/error :self-host/init-failed e))))))
 
-;; The header's Logout clears the session, stops RTC, and would leave the app
-;; stuck on the Cognito login until a reload - re-establish the fixed local
-;; session immediately so Logout is a harmless no-op in self-host.
-(when config/self-host?
-  (c.m/run-background-task
-   ::reinit-session-after-logout
-   (m/reduce
-    (fn [_ _]
-      (state/pub-event! [:self-host/init])
-      nil)
-    rtc-flows/logout-flow)))

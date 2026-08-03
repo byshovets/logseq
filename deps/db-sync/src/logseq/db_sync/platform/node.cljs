@@ -8,6 +8,11 @@
     (.forEach headers (fn [value key] (aset out key value)))
     out))
 
+(defn- first-forwarded-value
+  "First element of a possibly comma-chained X-Forwarded-* header value."
+  [value]
+  (some-> value (string/split #",") first string/trim not-empty))
+
 (defn request-from-node
   [^js req {:keys [scheme host]}]
   (let [headers (js/Headers.)
@@ -18,8 +23,16 @@
               (when (some? value)
                 (.set headers (string/lower-case k) value))))
         method (or (.-method req) "GET")
-        host (or host (aget node-headers "host") "localhost")
-        scheme (or scheme "http")
+        ;; honor the reverse proxy's forwarded origin (unless configured
+        ;; explicitly): responses embed absolute URLs, and an http:// one on an
+        ;; https page is blocked as mixed content
+        host (or host
+                 (first-forwarded-value (aget node-headers "x-forwarded-host"))
+                 (aget node-headers "host")
+                 "localhost")
+        scheme (or scheme
+                   (first-forwarded-value (aget node-headers "x-forwarded-proto"))
+                   "http")
         url (str scheme "://" host (.-url req))
         init #js {:method method
                   :headers headers}]
