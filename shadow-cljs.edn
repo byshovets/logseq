@@ -86,7 +86,8 @@
               :build-hooks [(shadow.hooks/build-metadata-hook "--long --always --dirty")]
               :closure-defines {goog.debug.LOGGING_ENABLED true
                                 lambdaisland.glogi.console/colorize "false"
-                                lambdaisland.glogi.console/timestamp "true"}
+                                lambdaisland.glogi.console/timestamp "true"
+                                frontend.worker.sync.upload/SELF-HOST #shadow/env ["SELF_HOST" :as :bool :default false]}
               :devtools {:watch-path "/static"
                          :preloads [devtools.preload
                                     shadow.remote.runtime.cljs.browser]

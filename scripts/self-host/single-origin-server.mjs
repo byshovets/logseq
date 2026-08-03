@@ -39,6 +39,12 @@ const DATA_DIR = path.resolve(process.env.DB_SYNC_DATA_DIR || path.join(ROOT, '.
 const TLS_CERT = process.env.TLS_CERT;
 const TLS_KEY = process.env.TLS_KEY;
 const TLS = Boolean(TLS_CERT && TLS_KEY);
+if (Boolean(TLS_CERT) !== Boolean(TLS_KEY)) {
+  // Fail fast: a half-configured TLS setup silently serving plain HTTP would
+  // expose the no-auth API unencrypted while the operator expects HTTPS.
+  console.error('TLS misconfiguration: set BOTH TLS_CERT and TLS_KEY (or neither).');
+  process.exit(1);
+}
 
 // The adapter's whole HTTP surface (deps/db-sync .../node/dispatch.cljs).
 const ADAPTER_ROUTES = /^\/(e2ee|(health|graphs|assets|sync)([/?]|$))/;
@@ -75,6 +81,8 @@ const MIME = {
 
 // --- adapter child process ---------------------------------------------------
 
+let shuttingDown = false;
+
 function startAdapter() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const child = spawn(process.execPath, [ADAPTER_PATH], {
@@ -88,6 +96,7 @@ function startAdapter() {
     stdio: 'inherit',
   });
   child.on('exit', (code, signal) => {
+    if (shuttingDown) return; // we killed it; the signal handler owns the exit
     console.error(`db-sync adapter exited (code=${code} signal=${signal}); shutting down`);
     process.exit(code === null ? 1 : code || 1);
   });
@@ -231,6 +240,7 @@ server.on('upgrade', (req, socket, head) => {
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
+    shuttingDown = true;
     adapter.kill(sig);
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 2000).unref();

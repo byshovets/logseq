@@ -100,23 +100,39 @@
   (or (nil? current-repo) (config/demo-graph? current-repo)))
 
 (defn- <self-host-auto-open!
-  "On a fresh browser, download + open the newest remote graph so a new device
-   lands directly in the user's data. Newest by the server's `updated-at`, which
-   changes on graph creation and on upload completion but NOT on edits - so with
-   several graphs this picks the most recently added one, not the most recently
-   edited one. A browser that already holds a user graph keeps its last-used
-   graph. Uses the actual local OPFS db list (not get-repos, which also lists
-   remote graphs)."
+  "On a fresh browser, download + open the newest READY remote graph so a new
+   device lands directly in the user's data. Newest by the server's
+   `updated-at`, which changes on graph creation and on upload completion but
+   NOT on edits - so with several graphs this picks the most recently added
+   one, not the most recently edited one. A not-ready graph is still being
+   bootstrap-uploaded (downloading it would 409), so when only not-ready graphs
+   exist, poll for a while until the uploader finishes. A browser that already
+   holds a user graph keeps its last-used graph. Uses the actual local OPFS db
+   list (not get-repos, which also lists remote graphs)."
   []
-  (p/let [graphs (state/get-rtc-graphs)
-          local-dbs (persist-db/<list-db)
+  (p/let [local-dbs (persist-db/<list-db)
           local-urls (set (map :name local-dbs))]
-    (when (and (seq graphs) (fresh-browser? (state/get-current-repo)))
-      (let [{:keys [url GraphName GraphUUID GraphSchemaVersion graph-e2ee?]}
-            (apply max-key #(or (:updated-at %) 0) graphs)]
-        (when (and url (not (contains? local-urls url)))
-          ;; the :rtc/download-remote-graph event downloads AND switches to it
-          (state/pub-event! [:rtc/download-remote-graph GraphName GraphUUID GraphSchemaVersion graph-e2ee?]))))))
+    (p/loop [attempt 0]
+      (let [graphs (state/get-rtc-graphs)
+            ready (filterv #(not= false (:graph-ready-for-use? %)) graphs)]
+        (when (fresh-browser? (state/get-current-repo))
+          (cond
+            (seq ready)
+            (let [{:keys [url GraphName GraphUUID GraphSchemaVersion graph-e2ee?]}
+                  (apply max-key #(or (:updated-at %) 0) ready)]
+              (when (and url (not (contains? local-urls url)))
+                ;; the :rtc/download-remote-graph event downloads AND switches to it
+                (state/pub-event! [:rtc/download-remote-graph GraphName GraphUUID GraphSchemaVersion graph-e2ee?])))
+
+            (and (seq graphs) (< attempt 12))
+            (p/do!
+             (p/delay 10000)
+             (rtc-handler/<get-remote-graphs)
+             (p/recur (inc attempt)))
+
+            (seq graphs)
+            (log/warn :self-host/auto-open-gave-up
+                      {:reason :no-graph-became-ready :attempts attempt})))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Auto-upload (first-run: a graph you create is synced without a manual step)
@@ -139,27 +155,43 @@
   [repo]
   (some #(when (= repo (:url %)) %) (state/get-rtc-graphs)))
 
-(defn- <delete-stale-remote-graph!
-  "Delete `repo`'s not-ready remote counterpart. The server creates the graph
-   row not-ready and flips it only after the final snapshot batch, so a
-   not-ready row is an interrupted upload - removing it lets the retry start
-   clean (a retried upload would otherwise fail with graph-already-exists)."
+(def ^:private interrupted-upload-min-age-ms
+  "The server's ready bit alone cannot distinguish an interrupted upload from
+   one that is still in progress (another tab or browser bootstrap-uploading
+   right now). `updated-at` is written at row creation, so only a not-ready row
+   older than this is treated as interrupted and safe to recover."
+  (* 30 60 1000))
+
+(defn- interrupted-upload?
+  "True when `remote` is a not-ready graph row old enough that no live
+   bootstrap upload can plausibly still be writing it. The server creates the
+   row not-ready and flips it only after the final snapshot batch."
+  [remote]
+  (and (false? (:graph-ready-for-use? remote))
+       (number? (:updated-at remote))
+       (> (- (js/Date.now) (:updated-at remote)) interrupted-upload-min-age-ms)))
+
+(defn- <delete-interrupted-remote-graph!
+  "Delete `repo`'s interrupted-upload leftover so the retry starts clean (a
+   retried upload would otherwise fail with graph-already-exists)."
   [repo]
   (let [{:keys [GraphUUID GraphSchemaVersion]} (remote-counterpart repo)]
     (when GraphUUID
-      (log/info :self-host/delete-stale-remote-graph {:repo repo :graph-uuid GraphUUID})
+      (log/info :self-host/delete-interrupted-remote-graph {:repo repo :graph-uuid GraphUUID})
       (p/let [_ (rtc-handler/<rtc-delete-graph! GraphUUID GraphSchemaVersion)]
         (rtc-handler/<get-remote-graphs)))))
 
 (defn- <upload-graph-with-recovery!
-  "Upload `repo`, clearing any interrupted-upload leftover first. Failures are
+  "Upload `repo`, clearing an interrupted-upload leftover first. Failures are
    surfaced to the user; the next open of the graph retries automatically."
   [repo]
   (-> (p/let [remote (remote-counterpart repo)
-              _ (when (false? (:graph-ready-for-use? remote))
-                  (<delete-stale-remote-graph! repo))]
-        (log/info :self-host/auto-upload-graph repo)
-        (rtc-handler/<rtc-upload-graph! repo false))
+              _ (when (interrupted-upload? remote)
+                  (<delete-interrupted-remote-graph! repo))]
+        ;; the delete round-trip may have outlived this graph being current
+        (when (= repo (state/get-current-repo))
+          (log/info :self-host/auto-upload-graph repo)
+          (rtc-handler/<rtc-upload-graph! repo false)))
       (p/catch
        (fn [e]
          (log/error :self-host/auto-upload-failed {:repo repo :error e})
@@ -169,32 +201,66 @@
              (or (ex-message e) (str e)))
           :error)))))
 
+(def ^:private remote-check-retry-delays-ms [5000 15000 45000])
+
+(defn- <fetch-remote-graphs-with-retry!
+  "Fetch the graph list, retrying a few times over a transient backend outage
+   (the repo-flow is deduplicated, so nothing else would re-trigger the check).
+   Rejects after the last attempt; stops early when `repo` is no longer
+   current."
+  [repo]
+  (p/loop [attempt 0]
+    (-> (rtc-handler/<get-remote-graphs)
+        (p/catch
+         (fn [e]
+           (let [delay-ms (get remote-check-retry-delays-ms attempt)]
+             (if (and delay-ms (= repo (state/get-current-repo)))
+               (p/do!
+                (p/delay delay-ms)
+                (p/recur (inc attempt)))
+               (throw e))))))))
+
 (defn- <auto-upload-graph!
   "Sync `repo` to the self-host server when it has no ready remote counterpart:
-   never-synced graphs upload, and interrupted uploads (not-ready remote row +
-   already-persisted local RTC id) recover instead of being skipped forever.
-   The decision is made against a freshly fetched graph list, never a stale
-   one. Demo graphs stay local: every fresh browser creates its own local Demo
-   before init runs, so syncing it would collide with a remote Demo uploaded by
-   another browser."
+   never-synced graphs upload, and interrupted uploads (old not-ready remote
+   row + already-persisted local RTC id) recover instead of being skipped
+   forever. The decision is made against a freshly fetched graph list, never a
+   stale one. Demo graphs stay local: every fresh browser creates its own local
+   Demo before init runs, so syncing it would collide with a remote Demo
+   uploaded by another browser."
   [repo]
   (when (and repo
              (config/db-based-graph? repo)
-             (not (config/demo-graph? repo)))
+             (not (config/demo-graph? repo))
+             ;; pre-session fires can't reach the server; init re-runs this
+             ;; after it installs the local session
+             (some? (state/get-auth-id-token)))
     (p/let [db-ready? (<wait-for-db-conn repo)]
       (if-not db-ready?
         (log/info :self-host/auto-upload-no-db-conn repo)
         (when (= repo (state/get-current-repo))
-          (-> (p/let [_ (rtc-handler/<get-remote-graphs)]
-                (let [remote (remote-counterpart repo)]
-                  (when (and (or (nil? remote)
-                                 (false? (:graph-ready-for-use? remote)))
-                             (nil? (:rtc/downloading-graph-uuid @state/state))
-                             (not (true? (:rtc/uploading? @state/state))))
-                    (<upload-graph-with-recovery! repo))))
-              ;; pre-session-init fires can't fetch yet; the init-time call retries
-              (p/catch (fn [e] (log/info :self-host/auto-upload-check-skipped
-                                         {:repo repo :error (ex-message e)})))))))))
+          (-> (p/let [_ (<fetch-remote-graphs-with-retry! repo)]
+                ;; re-check: the user may have switched graphs during the fetch
+                (when (= repo (state/get-current-repo))
+                  (let [remote (remote-counterpart repo)]
+                    (cond
+                      (and (false? (:graph-ready-for-use? remote))
+                           (not (interrupted-upload? remote)))
+                      (log/info :self-host/auto-upload-deferred
+                                {:repo repo :reason :remote-upload-possibly-in-progress})
+
+                      (and (or (nil? remote) (interrupted-upload? remote))
+                           (nil? (:rtc/downloading-graph-uuid @state/state))
+                           (not (true? (:rtc/uploading? @state/state))))
+                      (<upload-graph-with-recovery! repo)))))
+              (p/catch
+               (fn [e]
+                 (log/error :self-host/auto-upload-check-failed {:repo repo :error e})
+                 (notification/show!
+                  (t :self-host/auto-upload-failed
+                     (common-config/strip-leading-db-version-prefix repo)
+                     (or (ex-message e) (str e)))
+                  :error)))))))))
 
 ;; Direct m/reduce over the continuous current-repo-flow (same shape as
 ;; frontend.background-tasks); fire-and-forget - the upload guards itself.

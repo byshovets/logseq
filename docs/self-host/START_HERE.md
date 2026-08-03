@@ -29,12 +29,16 @@ Branch **`byshovets/self-host-web-mvp`**, built against upstream edition
 - **10.2** deploy runbook with Pocket ID forward-auth at the proxy:
   [DEPLOY.md](./DEPLOY.md).
 - **10.3** first-run gap closed: a graph without a ready remote counterpart
-  **auto-uploads** on create/open (interrupted uploads recover: the not-ready
-  server row is deleted and the upload retried; failures surface as an error
-  notification). Auto-open picks the newest remote graph (by server metadata =
-  most recently added, not most recently edited) and only fires on a fresh
-  browser (current graph nil/Demo). Demo graphs stay local on purpose - every
-  fresh browser makes its own local Demo, so syncing it would collide.
+  **auto-uploads** on create/open (with bounded retry over a backend outage;
+  failures surface as an error notification). Interrupted uploads recover: a
+  not-ready server row **older than 30 minutes** is deleted and the upload
+  retried - the age gate exists because the ready bit alone cannot distinguish
+  an interrupted upload from one another tab/browser is running right now.
+  Auto-open picks the newest **ready** remote graph (by server metadata = most
+  recently added, not most recently edited; polls while all candidates are
+  still uploading) and only fires on a fresh browser (current graph nil/Demo).
+  Demo graphs stay local on purpose - every fresh browser makes its own local
+  Demo, so syncing it would collide.
 - **10.4** storage capability gate: unsupported browsers and insecure origins
   (plain HTTP on non-localhost - OPFS needs a secure context) each get an
   explicit error page (verified by stripping `getDirectory` in a real browser).

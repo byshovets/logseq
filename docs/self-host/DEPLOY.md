@@ -75,8 +75,8 @@ docker run -d --name logseq \
 
 First run: the app boots into a local Demo graph; create your own graph and it
 is **synced to the server automatically** (Demo stays browser-local by design).
-Any other browser pointed at the origin then auto-opens the newest remote graph
-(newest by server metadata, i.e. most recently added - not most recently
+Any other browser pointed at the origin then auto-opens the newest ready remote
+graph (newest by server metadata, i.e. most recently added - not most recently
 edited).
 
 Sizing (measured, PLAN.md 10.7): 256 MB RAM steady / 512 MB limit, 0.5 vCPU,
