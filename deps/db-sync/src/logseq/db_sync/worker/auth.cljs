@@ -56,6 +56,21 @@
   [env]
   (env-flag-enabled? env "DB_SYNC_ALLOW_UNVERIFIED_JWT_CLAIMS"))
 
+(defn- auth-disabled?
+  "Single-user self-host mode: accept every request as one fixed local user."
+  [env]
+  (env-flag-enabled? env "DB_SYNC_DISABLE_AUTH"))
+
+;; sub must be a UUID: the client turns the owner's user-id into a graph-member
+;; page's :block/uuid, and the search indexer rejects non-UUID block ids.
+(def ^:private local-user-claims
+  #js {"sub" "00000000-0000-0000-0000-000000000001"
+       "email" "local@localhost"
+       "email_verified" true
+       "cognito:username" "local"
+       "preferred_username" "local"
+       "name" "Local"})
+
 (defn- expired-token?
   [token]
   (when-let [claims (unsafe-jwt-claims token)]
@@ -65,7 +80,9 @@
            (<= exp now-s)))))
 
 (defn auth-claims [request env]
-  (let [token (token-from-request request)]
+  (if (auth-disabled? env)
+    (p/resolved local-user-claims)
+   (let [token (token-from-request request)]
     (if (string? token)
       (if (expired-token? token)
         (p/resolved nil)
@@ -80,4 +97,4 @@
 
                          :else
                          (p/rejected error))))))
-      (p/resolved nil))))
+      (p/resolved nil)))))
