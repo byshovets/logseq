@@ -65,6 +65,10 @@ limit for very large graphs.
 
 ### Without Docker
 
+Build environment: **JDK 21+** (the pinned closure-compiler is built for
+class-file 65.0 - shadow-cljs fails to load under Java 11/17), **Node >= 22.20**,
+**pnpm 10.33.0**.
+
 ```bash
 pnpm install
 SELF_HOST=true pnpm run release-app

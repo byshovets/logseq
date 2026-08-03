@@ -4,22 +4,17 @@ date: 2026-08-01
 
 # Logseq -> Self-Hosted Web App: Transformation Plan
 
-> **Status (2026-08-03): working MVP built and validated end-to-end.** A
-> single-user self-host build runs locally: create/edit notes in one browser ->
-> they persist server-side -> a fresh browser auto-opens the graph and shows the
-> same notes, with no login. Branch `byshovets/self-host-web-mvp` (9 files,
-> uncommitted). §MVP records the as-built requirements, seams, and gotchas; §10
-> is the path from MVP to production. What is **not** yet done: production
-> packaging (single-origin Docker, release build), first-run UX polish, and the
-> hardening in §10. So: the approach is proven, the product is not shipped.
-
-> **Status update (2026-08-03, later): Phase 4 implemented.** §10.1 (origin-default
-> sync URLs, single-origin server, Docker image), §10.2 (runbook: DEPLOY.md),
-> §10.3 (auto-upload of never-synced non-Demo graphs; auto-open = most recently
-> updated remote graph, fresh browsers only), and the §10.4 OPFS gate are built
-> and the A->B smoke passes against both the dev stack and the release
-> single-origin server. See START_HERE.md for the updated state; what remains of
-> §10.4/10.7 is measurement/robustness runs, not code.
+> **Status (2026-08-03): MVP + Phase 4 built, verified, and committed.** A
+> single-user self-host deployment works end-to-end: create/edit notes in one
+> browser -> they persist server-side -> a fresh browser auto-opens the graph and
+> shows the same notes, with no login and **no manual sync step**. Branch
+> `byshovets/self-host-web-mvp`, seven atomic commits (see START_HERE.md).
+> §1b records the MVP as-built requirements, seams, and gotchas; §10 records the
+> productionization as-built: origin-default sync URLs, the single-origin server,
+> the Docker image (container-verified), auto-upload of the first graph, the OPFS
+> gate, and the DEPLOY.md runbook. What remains is **not code**: deploying it
+> (DEPLOY.md), and the §10.4/§10.7 measurement/robustness runs (real graph size,
+> adapter-restart behavior, checksum repro) plus the §10.5 CI decision.
 
 > **Currentness (FPF G.11).** Built and validated against tree edition
 > `9a11243d50` (upstream master, pnpm era). This tracks a moving upstream master
@@ -467,6 +462,16 @@ engine range, but I verified it **builds and runs on Node 26** under pnpm's
 project's `engines` requires `node >=22.20.0`. Pin the container to Node 22 or 24
 for the cleanest match; Node 26 also works.
 
+**[E] Toolchain note (2026-08-03, found by the Docker build): building the app
+requires JDK 21+.** The pinned closure-compiler (v20250820) ships class-file
+65.0 bytecode, so shadow-cljs fails to load under Java 11/17
+(`UnsupportedClassVersionError`). This silently broke upstream's root
+Dockerfile (temurin-11 base); the fork-owned `scripts/self-host/Dockerfile`
+uses `clojure:temurin-21-tools-deps-bookworm-slim`. Local development needs the
+same JDK 21+. Second build gotcha: `pnpm install` inside `deps/db-sync` walks
+up to the root pnpm workspace and hoists everything there - pass
+`--ignore-workspace` when a local `deps/db-sync/node_modules` is needed.
+
 ---
 
 ## 7b. Durability / crash resilience (vs Google Docs)
@@ -612,9 +617,11 @@ Findings:
   no-auth session). Done and validated.
 - Phase 3 - auto-open the synced graph + e2ee off. Done and validated.
 
-**Phase 4 - productionize.** The detailed backlog is §10. Summary: release build
-with `SELF_HOST`, single-origin Docker image, first-run UX, OPFS gate, reverse
-proxy, backups, commit + CI.
+**Phase 4 - productionize: DONE (2026-08-03).** Release build with `SELF_HOST`,
+single-origin server + Docker image (container-verified), first-run auto-upload,
+OPFS gate, deploy runbook (DEPLOY.md), committed. The per-item as-built record
+is §10; still open there: actually deploying (ops-side), the measurement runs
+(§10.4/§10.7), and the CI decision (§10.5).
 
 **Phase 5 (separate concern) - editor durability.** The measured patch (§7b),
 independent of self-hosting. Not on the critical path.
@@ -623,10 +630,26 @@ independent of self-hosting. Not on the critical path.
 
 ## 10. Path to production (from the working MVP)
 
-The MVP proves the design; these are the concrete, MVP-informed steps to a
-shippable image. Ordered by dependency. Each item says why it exists.
+> **As-built status (2026-08-03):** 10.1, 10.2 (runbook side), 10.3, and the
+> OPFS gate of 10.4 are **DONE and verified**; each item below carries a DONE
+> banner with what actually shipped. Still open: the 10.4 measurement/robustness
+> runs, 10.7 re-measurement at real graph size, and the 10.5 CI decision.
 
 ### 10.1 Single-origin release build + Docker image (the core packaging)
+
+> **DONE.** `SELF_HOST=true pnpm run release-app` reaches the release `:app`
+> closure-defines (verified: the release db-worker has no CDN references; the
+> A->B smoke passes against the release build). Sync URLs default to the page
+> origin via `config.cljs` (custom URL > dev adapter > origin > upstream
+> default) - no localStorage seeding needed. Single-origin serving = option (a),
+> as a stdlib-only Node server (`scripts/self-host/single-origin-server.mjs`):
+> serves `static/`, proxies `/health|/graphs*|/e2ee*|/assets/*|/sync/*` incl.
+> the WS upgrade, and supervises the adapter as a child process. The root
+> Dockerfile was left untouched (upstream-owned, and stale: its temurin-11 base
+> can no longer build the app - §7 toolchain note); instead a fork-owned
+> `scripts/self-host/Dockerfile` (temurin-21 + Node 24 builder, node:24-slim
+> runner, `/data` volume) builds THIS checkout. Image verified: container
+> healthy, fresh browser auto-opens a seeded graph and renders its synced note.
 - Build the app in `SELF_HOST` mode as a **release** build, not the watch build:
   `SELF_HOST=true pnpm run release-app` (needs the same shadow define wiring the
   MVP added). Verify `SELF_HOST` reaches the release `:app` closure-defines
@@ -649,6 +672,11 @@ shippable image. Ordered by dependency. Each item says why it exists.
   `assets/`). Document backup = snapshot the volume or `sqlite3 .backup`.
 
 ### 10.2 Security boundary - DECIDED: Pocket ID forward-auth at the proxy
+
+> **Runbook side DONE** (DEPLOY.md: Caddy `forward_auth` example, the
+> WS-upgrade caveat, topology). The actual VPS/proxy setup is ops work at
+> deploy time; verify sync connects through the auth gate on the real proxy.
+
 With `DB_SYNC_DISABLE_AUTH` + e2ee-off, **anyone who reaches the origin has full
 read/write, and server data is plaintext at rest.** The reverse proxy in front IS
 the entire security model - so the boundary must be real.
@@ -691,8 +719,21 @@ Also: tighten the adapter's `Access-Control-Allow-Origin: *` to the deploy origi
 (single-origin, §10.1, makes CORS a non-issue anyway).
 
 ### 10.3 First-run UX (the one gap the MVP left)
-Auto-open only fires once a remote graph exists. A brand-new deployment boots into
-the local Demo graph with nothing synced. Decide the first-run flow:
+
+> **DONE - the "simplest" option, generalized.** Any never-synced non-Demo DB
+> graph **auto-uploads** on create/open (`self_host.cljs`: a background task
+> over `current-repo-flow` + an init-time hook; upload via `<rtc-upload-graph!`,
+> e2ee off). Demo graphs deliberately stay local: every fresh browser creates
+> its own local Demo before `:self-host/init` runs, so syncing it would collide
+> with a remote Demo from another browser. Multi-graph auto-open defined: pick
+> the **most recently updated** remote graph (`:updated-at` from `/graphs`), and
+> only on a **fresh browser** (current graph nil/Demo) so a returning browser
+> keeps its last-used graph. Two implementation gotchas are recorded in
+> START_HERE ("Don't re-break these"): wait for the db conn (repo is set before
+> the conn registers), and consume the continuous repo-flow with a direct
+> `m/reduce`.
+
+The original decision space, kept for the record:
 - simplest: on first run, auto-upload the initial graph to the server (so device 2
   auto-opens it); or
 - a clear one-click "Sync this graph" affordance (the cloud icon exists; verify it
@@ -703,7 +744,11 @@ multiple graphs (open last-used; let the user pick).
 
 ### 10.4 Robustness the MVP did not exercise (§1 assurance scope)
 - **OPFS capability gate**: detect missing OPFS SAHPool and show a clear error
-  page instead of a silent failure (no fallback exists).
+  page instead of a silent failure (no fallback exists). **DONE** - main-thread
+  probe of `navigator.storage.getDirectory` at namespace load (the sync-handle
+  API is worker-only; every browser shipping `getDirectory` ships it too),
+  verified by stripping the API in a real browser. The rest of this list is
+  still open - it is measurement, not code:
 - **Scale**: test a realistically large graph (the MVP used a ~426-row demo) for
   snapshot upload/download time and memory; the adapter streams, but verify.
 - **Server restart / reconnect**: confirm the client's pending-op queue re-syncs
@@ -712,15 +757,15 @@ multiple graphs (open last-used; let the user pick).
   repro harness once before calling sync production-grade.
 
 ### 10.5 Decisions to lock before shipping
-- **Keep e2ee off?** [D-pending] The MVP forces it off because on-mode rendered
-  encrypted blobs on device 2, and a hardcoded self-host password would be
-  security theater anyway. Accepting off means server-side plaintext behind the
-  proxy. Alternative (real e2ee with a user-entered password persisted per device)
-  is materially more work and re-introduces the password UX. Recommend: **stay
-  off**, lean on the proxy + disk encryption.
-- **Commit + CI.** The change set is uncommitted on the branch. Commit, add a
-  smoke test (the Playwright A->B flow makes a good CI gate), and decide whether
-  this lives as a permanent fork feature or a config-flag PR upstream.
+- **Keep e2ee off?** [D] **Locked: off** (as recommended). The MVP forces it off
+  because on-mode rendered encrypted blobs on device 2, and a hardcoded
+  self-host password would be security theater anyway. Off means server-side
+  plaintext behind the proxy - lean on the proxy + disk encryption.
+- **Commit + CI.** Commit **DONE** (seven atomic commits, START_HERE.md lists
+  them); the smoke test ships in-repo (`scripts/self-host/smoke-test.js`, now
+  also covering auto-upload and a release-build browser B). Still open: whether
+  to wire it into CI (it needs a full build - manual/nightly job material) and
+  whether to propose the flag-gated mode upstream (§11).
 
 ### 10.6 Explicit non-goals for v1 (unchanged from the MVP)
 Multi-user / access control (delegated to the proxy), simultaneous same-graph

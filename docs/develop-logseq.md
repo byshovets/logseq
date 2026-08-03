@@ -2,7 +2,7 @@
 ## Requirements
 
 - [Node.js](https://nodejs.org/en/download/) (See [build.yml](https://github.com/logseq/logseq/blob/master/.github/workflows/build.yml) for allowed version)  & [pnpm](https://pnpm.io/installation)
-- [Java & Clojure](https://clojure.org/guides/getting_started). (If you run into `Execution error (FileNotFoundException) at java.io.FileInputStream/open0 (FileInputStream.java:-2). -M:cljs (No such file or directory)`, it means you have a wrong Clojure version installed. Please uninstall it and follow the instructions linked.)
+- [Java & Clojure](https://clojure.org/guides/getting_started). **JDK 21 or newer is required**: the pinned closure-compiler ships class-file 65.0 bytecode, so shadow-cljs fails to load on Java 11/17 with `UnsupportedClassVersionError`. (If you run into `Execution error (FileNotFoundException) at java.io.FileInputStream/open0 (FileInputStream.java:-2). -M:cljs (No such file or directory)`, it means you have a wrong Clojure version installed. Please uninstall it and follow the instructions linked.)
 
 ## Clone project
 
