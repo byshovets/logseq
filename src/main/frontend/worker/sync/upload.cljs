@@ -215,9 +215,12 @@
 
 (defn- normalize-graph-e2ee?
   [graph-e2ee?]
-  (if (nil? graph-e2ee?)
-    true
-    (true? graph-e2ee?)))
+  (cond
+    ;; Self-host runs e2ee off (no shared key infra); forced here in the worker
+    ;; because create/upload decide e2ee on this side, not the main thread.
+    (:self-host? @worker-state/*db-sync-config) false
+    (nil? graph-e2ee?) true
+    :else (true? graph-e2ee?)))
 
 (defn- graph-id->uuid
   [repo graph-id]

@@ -113,9 +113,11 @@
 
 (defn- normalize-graph-e2ee?
   [graph-e2ee?]
-  (if (nil? graph-e2ee?)
-    true
-    (true? graph-e2ee?)))
+  (cond
+    ;; Self-host runs with e2ee off so no RSA key pair / password is needed.
+    config/self-host? false
+    (nil? graph-e2ee?) true
+    :else (true? graph-e2ee?)))
 
 (defn- active-graph-operation []
   (let [{:rtc/keys [downloading-graph-uuid uploading?]} @state/state]
@@ -145,7 +147,8 @@
 
 (defn- <ensure-user-rsa-keys-on-server!
   [{:keys [server-rsa-keys-exists?]}]
-  (if (not= false server-rsa-keys-exists?)
+  (if (or config/self-host?              ; e2ee is off in self-host, no RSA needed
+          (not= false server-rsa-keys-exists?))
     (p/resolved nil)
     (if @state/*db-worker
       (-> (p/let [_ (<sync-auth-state-to-db-worker!)]

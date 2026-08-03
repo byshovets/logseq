@@ -202,6 +202,8 @@
                      _ (when target-repo
                          (apply-url-target-route! url-target))]
                (set-network-watcher!)
+               (when config/self-host?
+                 (state/pub-event! [:self-host/init]))
                (when (mobile-util/native-platform?)
                  (state/restore-mobile-theme!)))))
           (p/catch (fn [e]

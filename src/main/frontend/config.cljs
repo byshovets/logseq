@@ -38,6 +38,10 @@
 (goog-define ENABLE-DB-SYNC-LOCAL false)
 (defonce db-sync-local? ENABLE-DB-SYNC-LOCAL)
 
+;; Single-user self-host mode: no auth, sync server on the same/local origin.
+(goog-define SELF-HOST false)
+(defonce self-host? SELF-HOST)
+
 (defonce default-db-sync-ws-url
   (if db-sync-local?
     "ws://127.0.0.1:8787/sync/%s"
