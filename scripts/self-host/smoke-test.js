@@ -82,16 +82,32 @@ async function boot(ctx, url) {
   for (let i = 0; i < 30; i++) { await A.waitForTimeout(2000); if (graphStats().some((x) => x.txs > 0)) { synced = true; break; } }
   if (!synced) throw new Error('edit did not sync to server tx_log');
   console.log('A: graph created, auto-uploaded, edit synced');
-  await ctxA.close();
 
   // Browser B: fresh profile should auto-open the graph and show the edit.
   const ctxB = await chromium.launchPersistentContext(profileDir('B'), { headless: true, channel: 'chrome' });
   const B = await boot(ctxB, APP_B);
   await B.waitForTimeout(10000); // auto-open download + delta pull
   const hasMarker = await B.evaluate((m) => document.body.innerText.includes(m), MARKER);
-  await ctxB.close();
-
   if (!hasMarker) throw new Error('browser B did not show the edit from A (auto-open/sync failed)');
   console.log('B: auto-opened the graph and shows A\'s edit');
+
+  // Live sync: a second edit in A must reach the still-open B over B's own
+  // WebSocket - this fails if the synthetic session doesn't feed the login-user
+  // flow that gates RTC start in the first session.
+  const MARKER2 = MARKER + '-live';
+  await A.evaluate((marker) => {
+    const today = frontend.date.today();
+    const opts = cljs.core.PersistentHashMap.fromArrays([cljs.core.keyword('page')], [today]);
+    frontend.handler.editor.api_insert_new_block_BANG_(marker, opts);
+  }, MARKER2);
+  let live = false;
+  for (let i = 0; i < 30; i++) {
+    await B.waitForTimeout(2000);
+    if (await B.evaluate((m) => document.body.innerText.includes(m), MARKER2)) { live = true; break; }
+  }
+  await ctxA.close();
+  await ctxB.close();
+  if (!live) throw new Error('browser B did not receive A\'s live edit (RTC not running in first session)');
+  console.log('B: received A\'s live edit over RTC');
   console.log('SMOKE PASS');
 })().catch((e) => { console.error('SMOKE FAIL:', e.message); process.exit(1); });

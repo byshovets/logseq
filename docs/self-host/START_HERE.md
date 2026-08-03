@@ -28,13 +28,18 @@ Branch **`byshovets/self-host-web-mvp`**, built against upstream edition
   left untouched (upstream-owned; ours is separate by the PLAN.md 11 principle).
 - **10.2** deploy runbook with Pocket ID forward-auth at the proxy:
   [DEPLOY.md](./DEPLOY.md).
-- **10.3** first-run gap closed: a never-synced (non-Demo) graph **auto-uploads**
-  on create/open; auto-open now picks the most recently updated remote graph and
-  only fires on a fresh browser (current graph nil/Demo). Demo graphs stay local
-  on purpose - every fresh browser makes its own local Demo, so syncing it would
-  collide.
-- **10.4** OPFS capability gate: unsupported browsers get an explicit error page
-  (verified by stripping `getDirectory` in a real browser).
+- **10.3** first-run gap closed: a graph without a ready remote counterpart
+  **auto-uploads** on create/open (interrupted uploads recover: the not-ready
+  server row is deleted and the upload retried; failures surface as an error
+  notification). Auto-open picks the newest remote graph (by server metadata =
+  most recently added, not most recently edited) and only fires on a fresh
+  browser (current graph nil/Demo). Demo graphs stay local on purpose - every
+  fresh browser makes its own local Demo, so syncing it would collide.
+- **10.4** storage capability gate: unsupported browsers and insecure origins
+  (plain HTTP on non-localhost - OPFS needs a secure context) each get an
+  explicit error page (verified by stripping `getDirectory` in a real browser).
+  Non-localhost access therefore requires HTTPS: `TLS_CERT`/`TLS_KEY` on the
+  single-origin server, or TLS at a proxy in front (DEPLOY.md).
 
 All of it is verified: the A->B smoke passes on the dev stack, on the release
 single-origin server, and against the built Docker container (fresh browser

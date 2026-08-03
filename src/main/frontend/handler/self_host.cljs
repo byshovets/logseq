@@ -10,21 +10,30 @@
   rather than editing upstream files - see docs/self-host/PLAN.md 11."
   (:require [frontend.common.missionary :as c.m]
             [frontend.config :as config]
+            [frontend.context.i18n :refer [t]]
             [frontend.db :as db]
             [frontend.flows :as flows]
             [frontend.handler.db-based.rtc-flows :as rtc-flows]
             [frontend.handler.db-based.sync :as rtc-handler]
             [frontend.handler.events :as events]
+            [frontend.handler.notification :as notification]
             [frontend.handler.repo :as repo-handler]
             [frontend.persist-db :as persist-db]
             [frontend.state :as state]
             [lambdaisland.glogi :as log]
-            [logseq.db :as ldb]
+            [logseq.common.config :as common-config]
             [missionary.core :as m]
             [promesa.core :as p]))
 
+;; The sub is a UUID so the graph-member page's :block/uuid is valid (search
+;; rejects non-UUID block ids). Must match the server's local-user-claims.
+(def ^:private local-user
+  {:sub "00000000-0000-0000-0000-000000000001"
+   :email "local@localhost"
+   :username "local"})
+
 ;; ---------------------------------------------------------------------------
-;; OPFS capability gate
+;; Storage capability gate
 ;; ---------------------------------------------------------------------------
 
 (defn- opfs-supported?
@@ -37,23 +46,25 @@
                 (.-storage js/navigator)
                 (.-getDirectory ^js (.-storage js/navigator)))))
 
-(defn- show-opfs-error-page!
-  []
-  (let [el (js/document.createElement "div")]
-    (set! (.-id el) "self-host-opfs-error")
-    (set! (.. el -style -cssText)
+(defn- show-storage-error-page!
+  [body-text]
+  (let [wrap (js/document.createElement "div")
+        inner (js/document.createElement "div")
+        title (js/document.createElement "h1")
+        body (js/document.createElement "p")]
+    (set! (.-id wrap) "self-host-opfs-error")
+    (set! (.. wrap -style -cssText)
           (str "position:fixed;inset:0;z-index:99999;display:flex;align-items:center;"
                "justify-content:center;background:#1a1a1a;color:#eee;"
                "font-family:system-ui,sans-serif;text-align:center;padding:2rem;"))
-    (set! (.-innerHTML el)
-          (str "<div style=\"max-width:34rem\">"
-               "<h1 style=\"font-size:1.4rem;margin-bottom:1rem\">This browser can't run Logseq self-host</h1>"
-               "<p style=\"line-height:1.6\">Your notes are stored locally in an "
-               "<b>Origin Private File System</b> (OPFS) sqlite database, and this browser "
-               "does not support OPFS. Please use a recent version of Chrome, Edge, "
-               "Firefox, or Safari, outside of private browsing.</p>"
-               "</div>"))
-    (js/document.body.appendChild el)))
+    (set! (.. inner -style -cssText) "max-width:34rem")
+    (set! (.. title -style -cssText) "font-size:1.4rem;margin-bottom:1rem")
+    (set! (.. body -style -cssText) "line-height:1.6")
+    (set! (.-textContent title) (t :self-host/storage-error-title))
+    (set! (.-textContent body) body-text)
+    (.append inner title body)
+    (.append wrap inner)
+    (js/document.body.appendChild wrap)))
 
 ;; ---------------------------------------------------------------------------
 ;; Local no-auth session
@@ -71,11 +82,9 @@
                            (.replaceAll "/" "_")
                            (.replaceAll "=" "")))
         header (b64url "{\"alg\":\"none\",\"typ\":\"JWT\"}")
-        ;; sub is a UUID so the graph-member page's :block/uuid is valid (search
-        ;; rejects non-UUID block ids). Must match the server's local-user-claims.
-        payload (b64url (js/JSON.stringify #js {:sub "00000000-0000-0000-0000-000000000001"
-                                                :email "local@localhost"
-                                                "cognito:username" "local"
+        payload (b64url (js/JSON.stringify #js {:sub (:sub local-user)
+                                                :email (:email local-user)
+                                                "cognito:username" (:username local-user)
                                                 :exp exp
                                                 :iat now}))]
     (str header "." payload ".")))
@@ -91,10 +100,13 @@
   (or (nil? current-repo) (config/demo-graph? current-repo)))
 
 (defn- <self-host-auto-open!
-  "On a fresh browser, download + open the most recently updated remote graph so
-   a new device lands directly in the user's data. A browser that already holds a
-   user graph keeps its last-used graph. Uses the actual local OPFS db list (not
-   get-repos, which also lists remote graphs)."
+  "On a fresh browser, download + open the newest remote graph so a new device
+   lands directly in the user's data. Newest by the server's `updated-at`, which
+   changes on graph creation and on upload completion but NOT on edits - so with
+   several graphs this picks the most recently added one, not the most recently
+   edited one. A browser that already holds a user graph keeps its last-used
+   graph. Uses the actual local OPFS db list (not get-repos, which also lists
+   remote graphs)."
   []
   (p/let [graphs (state/get-rtc-graphs)
           local-dbs (persist-db/<list-db)
@@ -123,11 +135,48 @@
             (> (- (js/Date.now) started) 30000) (resolve false)
             :else (js/setTimeout poll 500))))))))
 
+(defn- remote-counterpart
+  [repo]
+  (some #(when (= repo (:url %)) %) (state/get-rtc-graphs)))
+
+(defn- <delete-stale-remote-graph!
+  "Delete `repo`'s not-ready remote counterpart. The server creates the graph
+   row not-ready and flips it only after the final snapshot batch, so a
+   not-ready row is an interrupted upload - removing it lets the retry start
+   clean (a retried upload would otherwise fail with graph-already-exists)."
+  [repo]
+  (let [{:keys [GraphUUID GraphSchemaVersion]} (remote-counterpart repo)]
+    (when GraphUUID
+      (log/info :self-host/delete-stale-remote-graph {:repo repo :graph-uuid GraphUUID})
+      (p/let [_ (rtc-handler/<rtc-delete-graph! GraphUUID GraphSchemaVersion)]
+        (rtc-handler/<get-remote-graphs)))))
+
+(defn- <upload-graph-with-recovery!
+  "Upload `repo`, clearing any interrupted-upload leftover first. Failures are
+   surfaced to the user; the next open of the graph retries automatically."
+  [repo]
+  (-> (p/let [remote (remote-counterpart repo)
+              _ (when (false? (:graph-ready-for-use? remote))
+                  (<delete-stale-remote-graph! repo))]
+        (log/info :self-host/auto-upload-graph repo)
+        (rtc-handler/<rtc-upload-graph! repo false))
+      (p/catch
+       (fn [e]
+         (log/error :self-host/auto-upload-failed {:repo repo :error e})
+         (notification/show!
+          (t :self-host/auto-upload-failed
+             (common-config/strip-leading-db-version-prefix repo)
+             (or (ex-message e) (str e)))
+          :error)))))
+
 (defn- <auto-upload-graph!
-  "Upload `repo` to the self-host server when it has never been synced (no RTC
-   graph id in its local db). Demo graphs stay local: every fresh browser creates
-   its own local Demo before init runs, so syncing it would collide with a
-   remote Demo uploaded by another browser."
+  "Sync `repo` to the self-host server when it has no ready remote counterpart:
+   never-synced graphs upload, and interrupted uploads (not-ready remote row +
+   already-persisted local RTC id) recover instead of being skipped forever.
+   The decision is made against a freshly fetched graph list, never a stale
+   one. Demo graphs stay local: every fresh browser creates its own local Demo
+   before init runs, so syncing it would collide with a remote Demo uploaded by
+   another browser."
   [repo]
   (when (and repo
              (config/db-based-graph? repo)
@@ -135,14 +184,17 @@
     (p/let [db-ready? (<wait-for-db-conn repo)]
       (if-not db-ready?
         (log/info :self-host/auto-upload-no-db-conn repo)
-        (when (and (= repo (state/get-current-repo))
-                   (nil? (ldb/get-graph-rtc-uuid (db/get-db repo)))
-                   (not (some #(= repo (:url %)) (state/get-rtc-graphs)))
-                   (nil? (:rtc/downloading-graph-uuid @state/state))
-                   (not (true? (:rtc/uploading? @state/state))))
-          (log/info :self-host/auto-upload-graph repo)
-          (-> (rtc-handler/<rtc-upload-graph! repo false)
-              (p/catch (fn [e] (log/error :self-host/auto-upload-failed {:repo repo :error e})))))))))
+        (when (= repo (state/get-current-repo))
+          (-> (p/let [_ (rtc-handler/<get-remote-graphs)]
+                (let [remote (remote-counterpart repo)]
+                  (when (and (or (nil? remote)
+                                 (false? (:graph-ready-for-use? remote)))
+                             (nil? (:rtc/downloading-graph-uuid @state/state))
+                             (not (true? (:rtc/uploading? @state/state))))
+                    (<upload-graph-with-recovery! repo))))
+              ;; pre-session-init fires can't fetch yet; the init-time call retries
+              (p/catch (fn [e] (log/info :self-host/auto-upload-check-skipped
+                                         {:repo repo :error (ex-message e)})))))))))
 
 ;; Direct m/reduce over the continuous current-repo-flow (same shape as
 ;; frontend.background-tasks); fire-and-forget - the upload guards itself.
@@ -158,9 +210,13 @@
 
 ;; The db-worker needs OPFS, so without it boot fails before :self-host/init
 ;; ever fires - surface the error page at namespace load (main.js is deferred,
-;; the DOM is ready by now).
+;; the DOM is ready by now). Insecure context is the usual cause: OPFS only
+;; exists on HTTPS or localhost origins.
 (when (and config/self-host? (not (opfs-supported?)))
-  (show-opfs-error-page!))
+  (show-storage-error-page!
+   (if (false? (.-isSecureContext js/window))
+     (t :self-host/insecure-context-error-body)
+     (t :self-host/opfs-error-body))))
 
 ;; ---------------------------------------------------------------------------
 ;; Boot
@@ -175,7 +231,14 @@
       (js/localStorage.setItem "id-token" token)
       (js/localStorage.setItem "access-token" token)
       (js/localStorage.setItem "refresh-token" token)
-      (state/set-user-info! {:UserGroups ["team"]}))
+      (state/set-user-info! {:UserGroups ["team"]})
+      ;; What user-handler/set-tokens! does on the normal login path: without a
+      ;; current login user, trigger-start-rtc-flow drops graph-switch/restore
+      ;; triggers and live sync never starts in the first session.
+      (reset! flows/*current-login-user
+              {:email (:email local-user)
+               :sub (:sub local-user)
+               :cognito:username (:username local-user)}))
     (-> (p/do!
          (state/pub-event! [:rtc/sync-app-state])
          (state/<invoke-db-worker :thread-api/set-db-sync-config

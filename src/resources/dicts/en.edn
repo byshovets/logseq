@@ -1630,6 +1630,11 @@
  :select/default-select-multiple "Select one or multiple"
  :select/new-option "+ New option: {1}"
 
+ :self-host/auto-upload-failed "Automatic sync of graph \"{1}\" failed: {2}. It will be retried the next time this graph is opened."
+ :self-host/insecure-context-error-body "This page was loaded over plain HTTP from a non-localhost address, so the browser disables the storage Logseq needs (OPFS requires a secure context). Serve it over HTTPS or open it via localhost."
+ :self-host/opfs-error-body "Your notes are stored locally in an Origin Private File System (OPFS) sqlite database, and this browser does not support OPFS. Please use a recent version of Chrome, Edge, Firefox, or Safari, outside of private browsing."
+ :self-host/storage-error-title "This browser can't run Logseq self-host"
+
  :server/error-notification "[Server] {1}"
  :server/mcp-url-copied "MCP URL copied to clipboard!"
  :server/start "Start server"

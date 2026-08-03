@@ -726,9 +726,11 @@ Also: tighten the adapter's `Access-Control-Allow-Origin: *` to the deploy origi
 > e2ee off). Demo graphs deliberately stay local: every fresh browser creates
 > its own local Demo before `:self-host/init` runs, so syncing it would collide
 > with a remote Demo from another browser. Multi-graph auto-open defined: pick
-> the **most recently updated** remote graph (`:updated-at` from `/graphs`), and
-> only on a **fresh browser** (current graph nil/Demo) so a returning browser
-> keeps its last-used graph. Two implementation gotchas are recorded in
+> the **newest** remote graph by the server's `:updated-at` - note this field
+> changes on graph creation and upload completion, NOT on edits, so it means
+> "most recently added", not "most recently edited" - and only on a **fresh
+> browser** (current graph nil/Demo) so a returning browser keeps its last-used
+> graph. Two implementation gotchas are recorded in
 > START_HERE ("Don't re-break these"): wait for the db conn (repo is set before
 > the conn registers), and consume the continuous repo-flow with a direct
 > `m/reduce`.
@@ -832,7 +834,10 @@ DNS.** One db-sync adapter instance is the single authoritative server per graph
   at the backend's direct LAN address (no tunnel); the office browser points at the
   VPS public address, which reverse-proxies to the backend over WireGuard. Same
   backend, same `graph-uuid`, one `tx_log` - it is one logical server reached two
-  ways, not two servers.
+  ways, not two servers. **[C] Both paths must be HTTPS** (OPFS = secure contexts
+  only; plain HTTP works only via localhost): the VPS path is TLS at the proxy
+  anyway, and the direct LAN path needs `TLS_CERT`/`TLS_KEY` on the single-origin
+  server or a home TLS proxy - see DEPLOY.md.
 - **Why this is enough (latency is a non-issue):** the app is local-first - edits
   hit the browser's local OPFS SQLite synchronously; backend sync is async/
   background. WireGuard latency therefore never touches the editing UX; it affects

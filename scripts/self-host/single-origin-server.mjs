@@ -17,9 +17,14 @@
 //   ADAPTER_PATH      built adapter script             (default <repo>/deps/db-sync/worker/dist/node-adapter.js)
 //   ADAPTER_PORT      loopback port for the adapter    (default 8787)
 //   DB_SYNC_DATA_DIR  adapter data volume              (default <repo>/.selfhost-data)
+//   TLS_CERT/TLS_KEY  PEM file paths; when both are set the server speaks HTTPS.
+//                     OPFS (the app's local storage) only exists in secure
+//                     contexts, so plain HTTP works ONLY via localhost - any
+//                     LAN/remote access needs TLS here or at a proxy in front.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,6 +36,9 @@ const STATIC_DIR = path.resolve(process.env.STATIC_DIR || path.join(ROOT, 'stati
 const ADAPTER_PATH = path.resolve(process.env.ADAPTER_PATH || path.join(ROOT, 'deps', 'db-sync', 'worker', 'dist', 'node-adapter.js'));
 const ADAPTER_PORT = Number(process.env.ADAPTER_PORT || 8787);
 const DATA_DIR = path.resolve(process.env.DB_SYNC_DATA_DIR || path.join(ROOT, '.selfhost-data'));
+const TLS_CERT = process.env.TLS_CERT;
+const TLS_KEY = process.env.TLS_KEY;
+const TLS = Boolean(TLS_CERT && TLS_KEY);
 
 // The adapter's whole HTTP surface (deps/db-sync .../node/dispatch.cljs).
 const ADAPTER_ROUTES = /^\/(e2ee|(health|graphs|assets|sync)([/?]|$))/;
@@ -203,13 +211,16 @@ if (!fs.existsSync(ADAPTER_PATH)) {
 const adapter = startAdapter();
 await waitForAdapter();
 
-const server = http.createServer((req, res) => {
+const handleRequest = (req, res) => {
   if (ADAPTER_ROUTES.test(req.url)) {
     proxyRequest(req, res);
   } else {
     serveStatic(req, res);
   }
-});
+};
+const server = TLS
+  ? https.createServer({ cert: fs.readFileSync(TLS_CERT), key: fs.readFileSync(TLS_KEY) }, handleRequest)
+  : http.createServer(handleRequest);
 server.on('upgrade', (req, socket, head) => {
   if (req.url.startsWith('/sync/')) {
     proxyUpgrade(req, socket, head);
@@ -227,5 +238,13 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
 }
 
 server.listen(PORT, HOST, () => {
-  console.log(`logseq self-host -> http://${HOST}:${PORT}  (static: ${STATIC_DIR}, data: ${DATA_DIR}, adapter: 127.0.0.1:${ADAPTER_PORT})`);
+  const scheme = TLS ? 'https' : 'http';
+  console.log(`logseq self-host -> ${scheme}://${HOST}:${PORT}  (static: ${STATIC_DIR}, data: ${DATA_DIR}, adapter: 127.0.0.1:${ADAPTER_PORT})`);
+  if (!TLS) {
+    console.warn(
+      'No TLS_CERT/TLS_KEY set: browsers only expose OPFS (the app\'s local storage) in secure contexts, ' +
+        'so this plain-HTTP server works via http://localhost only. For LAN or remote access, set TLS_CERT/TLS_KEY ' +
+        'or terminate TLS at a reverse proxy in front.'
+    );
+  }
 });

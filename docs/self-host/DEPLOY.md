@@ -19,6 +19,12 @@ office browser -> VPS (Pocket ID gate + reverse proxy) --WireGuard--> home serve
   holds no notebook data - it is purely the authenticated front door.
 - Each browser sets its own path: the home browser uses the LAN address
   directly; the office browser uses the VPS address. Same backend, same graphs.
+- **Every non-localhost path must be HTTPS.** The app stores graphs in OPFS,
+  which browsers only expose in secure contexts - plain `http://` works for
+  `localhost` only; on a LAN IP/hostname the app shows its storage error page
+  instead of booting. The VPS path gets TLS at the proxy anyway; for the direct
+  LAN path either set `TLS_CERT`/`TLS_KEY` on the container (see below) or put
+  a TLS-terminating proxy in front (e.g. home Caddy with `tls internal`).
 - **The app itself has no auth and e2ee is off** - anyone who can reach the
   origin has full read/write, and data is plaintext at rest. The reverse proxy
   IS the security model. Never expose the container port to the internet
@@ -53,10 +59,25 @@ volumes:
   logseq-data:
 ```
 
-Open `http://<host>:8080/`. First run: the app boots into a local Demo graph;
-create your own graph and it is **synced to the server automatically** (Demo
-stays browser-local by design). Any other browser pointed at the origin then
-auto-opens your most recently updated graph.
+Open `http://localhost:8080/` (from the host itself), or serve HTTPS for any
+other machine - either at a proxy in front, or directly by mounting a cert and
+setting `TLS_CERT`/`TLS_KEY` (PEM paths inside the container):
+
+```bash
+docker run -d --name logseq \
+  -p 8443:8080 \
+  -v logseq-data:/data \
+  -v /path/to/certs:/certs:ro \
+  -e TLS_CERT=/certs/fullchain.pem -e TLS_KEY=/certs/privkey.pem \
+  --restart unless-stopped \
+  logseq-selfhost
+```
+
+First run: the app boots into a local Demo graph; create your own graph and it
+is **synced to the server automatically** (Demo stays browser-local by design).
+Any other browser pointed at the origin then auto-opens the newest remote graph
+(newest by server metadata, i.e. most recently added - not most recently
+edited).
 
 Sizing (measured, PLAN.md 10.7): 256 MB RAM steady / 512 MB limit, 0.5 vCPU,
 1-2 GB volume (more for large asset libraries). The image defaults
@@ -132,10 +153,12 @@ PLAN.md 10.2). To gate it too, run the same forward-auth on a home proxy.
 
 ## Browser requirements
 
-Modern Chrome/Edge/Firefox/Safari, not in private browsing: graphs are stored
-locally in OPFS sqlite. Unsupported browsers get an explicit error page (the
-OPFS gate) instead of a silent failure. The server remains the source of truth -
-losing a browser's local copy only costs a re-download.
+Modern Chrome/Edge/Firefox/Safari, not in private browsing, over **HTTPS or
+localhost**: graphs are stored locally in OPFS sqlite, which browsers expose
+only in secure contexts. Unsupported browsers and insecure (plain-HTTP,
+non-localhost) origins each get an explicit error page instead of a silent
+failure. The server remains the source of truth - losing a browser's local
+copy only costs a re-download.
 
 ## Smoke test
 
