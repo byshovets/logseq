@@ -1,0 +1,13 @@
+# BuildKit per-Dockerfile ignore for scripts/self-host/Dockerfile.
+# Keep .git: the shadow-cljs build-metadata-hook runs `git describe`.
+node_modules
+**/node_modules
+static
+target
+.shadow-cljs
+.clj-kondo/.cache
+.selfhost-data
+.worktrees
+android
+ios
+*.log
