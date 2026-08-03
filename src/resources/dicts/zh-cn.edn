@@ -1631,6 +1631,7 @@
  :select/new-option "+ 新建选项：{1}"
 
  :self-host/auto-upload-failed "图谱 \"{1}\" 的自动同步失败：{2}。下次打开该图谱时将自动重试。"
+ :self-host/graph-name-collision "服务器上已存在另一个名为 \"{1}\" 的图谱。请重命名本地图谱，或删除服务器上的副本，才能开始同步。"
  :self-host/insecure-context-error-body "此页面通过非 localhost 的纯 HTTP 地址加载，浏览器因此禁用了 Logseq 所需的存储能力（OPFS 需要安全上下文）。请改用 HTTPS 访问，或通过 localhost 打开。"
  :self-host/opfs-error-body "您的笔记保存在浏览器本地的 OPFS（Origin Private File System）sqlite 数据库中，而此浏览器不支持 OPFS。请使用较新版本的 Chrome、Edge、Firefox 或 Safari，且不要使用隐私浏览模式。"
  :self-host/storage-error-title "此浏览器无法运行自托管版 Logseq"

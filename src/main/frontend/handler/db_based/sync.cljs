@@ -109,7 +109,14 @@
   (and (not (true? (:rtc/uploading? @state/state)))
        (let [graph (remote-graph repo)]
          (and (some? graph)
-              (not= false (:graph-ready-for-use? graph))))))
+              (not= false (:graph-ready-for-use? graph))
+              ;; Self-host: require the persisted local RTC uuid to match. The
+              ;; worker resolves a missing local graph id by remote NAME, which
+              ;; would merge a same-named unrelated local graph into the remote
+              ;; one instead of reporting the collision.
+              (or (not config/self-host?)
+                  (= (str (ldb/get-graph-rtc-uuid (db/get-db repo)))
+                     (str (:GraphUUID graph))))))))
 
 (defn- normalize-graph-e2ee?
   [graph-e2ee?]

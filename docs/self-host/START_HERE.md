@@ -46,8 +46,9 @@ Branch **`byshovets/self-host-web-mvp`**, built against upstream edition
 - **10.4** storage capability gate: unsupported browsers and insecure origins
   (plain HTTP on non-localhost - OPFS needs a secure context) each get an
   explicit error page (verified by stripping `getDirectory` in a real browser).
-  Non-localhost access therefore requires HTTPS: `TLS_CERT`/`TLS_KEY` on the
-  single-origin server, or TLS at a proxy in front (DEPLOY.md).
+  Non-localhost access therefore requires HTTPS - and **[D] TLS always
+  terminates at the reverse proxy, never in the app server** (the single-origin
+  server is plain-HTTP-only and rejects `TLS_CERT`/`TLS_KEY`; DEPLOY.md).
 
 All of it is verified: the A->B smoke passes on the dev stack, on the release
 single-origin server, and against the built Docker container (fresh browser

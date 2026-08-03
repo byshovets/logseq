@@ -839,9 +839,11 @@ DNS.** One db-sync adapter instance is the single authoritative server per graph
   VPS public address, which reverse-proxies to the backend over WireGuard. Same
   backend, same `graph-uuid`, one `tx_log` - it is one logical server reached two
   ways, not two servers. **[C] Both paths must be HTTPS** (OPFS = secure contexts
-  only; plain HTTP works only via localhost): the VPS path is TLS at the proxy
-  anyway, and the direct LAN path needs `TLS_CERT`/`TLS_KEY` on the single-origin
-  server or a home TLS proxy - see DEPLOY.md.
+  only; plain HTTP works only via localhost). **[D] (2026-08-03) TLS always
+  terminates at the reverse proxy, never in the app server**: the single-origin
+  server is plain-HTTP-only (it rejects `TLS_CERT`/`TLS_KEY`); the VPS path gets
+  TLS at the VPS proxy, the direct LAN path goes through a home TLS proxy (e.g.
+  Caddy `tls internal`) - see DEPLOY.md.
 - **Why this is enough (latency is a non-issue):** the app is local-first - edits
   hit the browser's local OPFS SQLite synchronously; backend sync is async/
   background. WireGuard latency therefore never touches the editing UX; it affects

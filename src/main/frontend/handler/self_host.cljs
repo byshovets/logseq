@@ -94,13 +94,20 @@
 ;; Auto-open (fresh browser -> land in the user's data)
 ;; ---------------------------------------------------------------------------
 
+(defn- demo-repo?
+  "Exact match on the canonical Demo graph. `config/demo-graph?` matches any
+   repo whose name merely ENDS in \"Demo\" (string/ends-with?), which would
+   silently exclude user graphs like \"ProjectDemo\" from sync."
+  [repo-url]
+  (= repo-url (str config/db-version-prefix config/demo-repo)))
+
 (defn- fresh-browser?
   "True when this browser's local OPFS db list holds no user graph - boot
    auto-creates a local Demo, so Demo alone still counts as fresh. Deliberately
    NOT keyed on the selected repo: a browser whose user graphs exist locally
    keeps its state even when Demo happened to be the last-selected graph."
   [local-dbs]
-  (empty? (remove #(config/demo-graph? (:name %)) local-dbs)))
+  (empty? (remove #(demo-repo? (:name %)) local-dbs)))
 
 (defn- <self-host-auto-open!
   "On a fresh browser, download + open the newest READY remote graph so a new
@@ -156,6 +163,17 @@
 (defn- remote-counterpart
   [repo]
   (some #(when (= repo (:url %)) %) (state/get-rtc-graphs)))
+
+(defn- synced-counterpart?
+  "True when `repo`'s persisted local RTC uuid matches its remote counterpart.
+   Name equality alone is NOT enough to treat a graph as synced: the worker
+   resolves a missing local graph id by remote NAME on rtc start, which would
+   merge a same-named unrelated local graph into the remote one."
+  [repo]
+  (let [remote (remote-counterpart repo)]
+    (and (some? remote)
+         (= (str (ldb/get-graph-rtc-uuid (db/get-db repo)))
+            (str (:GraphUUID remote))))))
 
 (defn- our-interrupted-upload?
   "True when `remote` is a not-ready row created by THIS browser's own
@@ -217,17 +235,31 @@
   "The critical section run under the graph's upload lock: decide against a
    fresh graph list, clear our own interrupted-upload leftover, upload. When
    another tab's upload held the lock, the fresh fetch afterwards sees the row
-   flip to ready and this becomes a no-op."
+   flip to ready and this becomes a no-op. A READY same-named remote graph that
+   does NOT match the local RTC uuid is a name collision - surfaced, never
+   merged into or deleted."
   [repo]
   (p/let [_ (<fetch-remote-graphs-with-retry! repo)]
     ;; re-check: the user may have switched graphs while waiting for the
     ;; lock or the fetch
     (when (= repo (state/get-current-repo))
       (let [remote (remote-counterpart repo)]
-        (when (and (or (nil? remote)
-                       (false? (:graph-ready-for-use? remote)))
-                   (nil? (:rtc/downloading-graph-uuid @state/state))
-                   (not (true? (:rtc/uploading? @state/state))))
+        (cond
+          (and (some? remote)
+               (not= false (:graph-ready-for-use? remote))
+               (not (synced-counterpart? repo)))
+          (do
+            (log/warn :self-host/graph-name-collision
+                      {:repo repo :remote-graph-uuid (:GraphUUID remote)})
+            (notification/show!
+             (t :self-host/graph-name-collision
+                (common-config/strip-leading-db-version-prefix repo))
+             :warning))
+
+          (and (or (nil? remote)
+                   (false? (:graph-ready-for-use? remote)))
+               (nil? (:rtc/downloading-graph-uuid @state/state))
+               (not (true? (:rtc/uploading? @state/state))))
           (p/let [_ (when (our-interrupted-upload? repo remote)
                       (<delete-interrupted-remote-graph! repo))]
             ;; the delete round-trip may have outlived this graph being current
@@ -246,7 +278,7 @@
   [repo]
   (when (and repo
              (config/db-based-graph? repo)
-             (not (config/demo-graph? repo))
+             (not (demo-repo? repo))
              ;; pre-session fires can't reach the server; init re-runs this
              ;; after it installs the local session
              (some? (state/get-auth-id-token)))
@@ -298,12 +330,17 @@
 (defmethod events/handle :self-host/init [[_]]
   (when @state/*db-worker
     (let [token (local-self-host-jwt)]
+      ;; The session lives in memory only. Persisting the synthetic JWTs to
+      ;; localStorage would make restore-tokens-from-localstorage adopt them on
+      ;; the next load and fire the normal :user/fetch-info-and-graphs path,
+      ;; which calls api.logseq.com with an unsigned token. The removals clean
+      ;; up tokens stored by earlier self-host builds.
+      (js/localStorage.removeItem "id-token")
+      (js/localStorage.removeItem "access-token")
+      (js/localStorage.removeItem "refresh-token")
       (state/set-auth-id-token token)
       (state/set-auth-access-token token)
       (state/set-auth-refresh-token token)
-      (js/localStorage.setItem "id-token" token)
-      (js/localStorage.setItem "access-token" token)
-      (js/localStorage.setItem "refresh-token" token)
       (state/set-user-info! {:UserGroups ["team"]})
       ;; What user-handler/set-tokens! does on the normal login path: without a
       ;; current login user, trigger-start-rtc-flow drops graph-switch/restore
@@ -322,8 +359,23 @@
          (rtc-handler/<get-remote-graphs)
          (repo-handler/refresh-repos!)
          (when-let [current-repo (state/get-current-repo)]
-           (if (some #(= current-repo (:url %)) (state/get-rtc-graphs))
+           ;; uuid match, not name match: a same-named unsynced local graph
+           ;; must go to upload/collision handling, never rtc-start (the worker
+           ;; would bind it to the remote graph by name and merge them)
+           (if (synced-counterpart? current-repo)
              (rtc-flows/trigger-rtc-start current-repo)
              (<auto-upload-graph! current-repo)))
          (<self-host-auto-open!))
         (p/catch (fn [e] (log/error :self-host/init-failed e))))))
+
+;; The header's Logout clears the session, stops RTC, and would leave the app
+;; stuck on the Cognito login until a reload - re-establish the fixed local
+;; session immediately so Logout is a harmless no-op in self-host.
+(when config/self-host?
+  (c.m/run-background-task
+   ::reinit-session-after-logout
+   (m/reduce
+    (fn [_ _]
+      (state/pub-event! [:self-host/init])
+      nil)
+    rtc-flows/logout-flow)))

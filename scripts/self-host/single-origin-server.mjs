@@ -17,14 +17,15 @@
 //   ADAPTER_PATH      built adapter script             (default <repo>/deps/db-sync/worker/dist/node-adapter.js)
 //   ADAPTER_PORT      loopback port for the adapter    (default 8787)
 //   DB_SYNC_DATA_DIR  adapter data volume              (default <repo>/.selfhost-data)
-//   TLS_CERT/TLS_KEY  PEM file paths; when both are set the server speaks HTTPS.
-//                     OPFS (the app's local storage) only exists in secure
-//                     contexts, so plain HTTP works ONLY via localhost - any
-//                     LAN/remote access needs TLS here or at a proxy in front.
+//
+// This server speaks plain HTTP by design (decided; docs/self-host/DEPLOY.md):
+// TLS always terminates at the reverse proxy in front, never here. OPFS (the
+// app's local storage) only exists in secure contexts, so browsers can use
+// this server directly via http://localhost only - every other path must go
+// through an HTTPS proxy.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
-import https from 'node:https';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,13 +37,10 @@ const STATIC_DIR = path.resolve(process.env.STATIC_DIR || path.join(ROOT, 'stati
 const ADAPTER_PATH = path.resolve(process.env.ADAPTER_PATH || path.join(ROOT, 'deps', 'db-sync', 'worker', 'dist', 'node-adapter.js'));
 const ADAPTER_PORT = Number(process.env.ADAPTER_PORT || 8787);
 const DATA_DIR = path.resolve(process.env.DB_SYNC_DATA_DIR || path.join(ROOT, '.selfhost-data'));
-const TLS_CERT = process.env.TLS_CERT;
-const TLS_KEY = process.env.TLS_KEY;
-const TLS = Boolean(TLS_CERT && TLS_KEY);
-if (Boolean(TLS_CERT) !== Boolean(TLS_KEY)) {
-  // Fail fast: a half-configured TLS setup silently serving plain HTTP would
-  // expose the no-auth API unencrypted while the operator expects HTTPS.
-  console.error('TLS misconfiguration: set BOTH TLS_CERT and TLS_KEY (or neither).');
+if (process.env.TLS_CERT || process.env.TLS_KEY) {
+  // Fail fast instead of silently ignoring a TLS expectation: this server
+  // never terminates TLS - that is the reverse proxy's job.
+  console.error('TLS_CERT/TLS_KEY are not supported: TLS terminates at the reverse proxy (see docs/self-host/DEPLOY.md).');
   process.exit(1);
 }
 
@@ -220,16 +218,13 @@ if (!fs.existsSync(ADAPTER_PATH)) {
 const adapter = startAdapter();
 await waitForAdapter();
 
-const handleRequest = (req, res) => {
+const server = http.createServer((req, res) => {
   if (ADAPTER_ROUTES.test(req.url)) {
     proxyRequest(req, res);
   } else {
     serveStatic(req, res);
   }
-};
-const server = TLS
-  ? https.createServer({ cert: fs.readFileSync(TLS_CERT), key: fs.readFileSync(TLS_KEY) }, handleRequest)
-  : http.createServer(handleRequest);
+});
 server.on('upgrade', (req, socket, head) => {
   if (req.url.startsWith('/sync/')) {
     proxyUpgrade(req, socket, head);
@@ -248,13 +243,10 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
 }
 
 server.listen(PORT, HOST, () => {
-  const scheme = TLS ? 'https' : 'http';
-  console.log(`logseq self-host -> ${scheme}://${HOST}:${PORT}  (static: ${STATIC_DIR}, data: ${DATA_DIR}, adapter: 127.0.0.1:${ADAPTER_PORT})`);
-  if (!TLS) {
-    console.warn(
-      'No TLS_CERT/TLS_KEY set: browsers only expose OPFS (the app\'s local storage) in secure contexts, ' +
-        'so this plain-HTTP server works via http://localhost only. For LAN or remote access, set TLS_CERT/TLS_KEY ' +
-        'or terminate TLS at a reverse proxy in front.'
-    );
-  }
+  console.log(`logseq self-host -> http://${HOST}:${PORT}  (static: ${STATIC_DIR}, data: ${DATA_DIR}, adapter: 127.0.0.1:${ADAPTER_PORT})`);
+  console.warn(
+    'Plain HTTP by design: browsers only expose OPFS (the app\'s local storage) in secure contexts, ' +
+      'so this server is directly usable via http://localhost only. Every other path must go through ' +
+      'the HTTPS reverse proxy in front (docs/self-host/DEPLOY.md).'
+  );
 });

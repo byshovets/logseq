@@ -19,12 +19,16 @@ office browser -> VPS (Pocket ID gate + reverse proxy) --WireGuard--> home serve
   holds no notebook data - it is purely the authenticated front door.
 - Each browser sets its own path: the home browser uses the LAN address
   directly; the office browser uses the VPS address. Same backend, same graphs.
-- **Every non-localhost path must be HTTPS.** The app stores graphs in OPFS,
-  which browsers only expose in secure contexts - plain `http://` works for
-  `localhost` only; on a LAN IP/hostname the app shows its storage error page
-  instead of booting. The VPS path gets TLS at the proxy anyway; for the direct
-  LAN path either set `TLS_CERT`/`TLS_KEY` on the container (see below) or put
-  a TLS-terminating proxy in front (e.g. home Caddy with `tls internal`).
+- **[D] TLS terminates at the reverse proxy, never in the app server.** The
+  single-origin server speaks plain HTTP only (it rejects `TLS_CERT`/`TLS_KEY`
+  outright); certificates, renewal, and cipher policy are the proxy's job on
+  every path. This matters because **every non-localhost path must be HTTPS**:
+  the app stores graphs in OPFS, which browsers only expose in secure contexts -
+  plain `http://` works for `localhost` only; on a LAN IP/hostname the app
+  shows its storage error page instead of booting. So the VPS path gets TLS at
+  the VPS proxy, and the direct home-LAN path goes through a home
+  TLS-terminating proxy (e.g. Caddy with `tls internal`) rather than hitting
+  the container port from other machines.
 - **The app itself has no auth and e2ee is off** - anyone who can reach the
   origin has full read/write, and data is plaintext at rest. The reverse proxy
   IS the security model. Never expose the container port to the internet
@@ -59,18 +63,15 @@ volumes:
   logseq-data:
 ```
 
-Open `http://localhost:8080/` (from the host itself), or serve HTTPS for any
-other machine - either at a proxy in front, or directly by mounting a cert and
-setting `TLS_CERT`/`TLS_KEY` (PEM paths inside the container):
+Open `http://localhost:8080/` (from the host itself). Any other machine goes
+through an HTTPS reverse proxy in front (the [D] above - the container never
+terminates TLS). Home-LAN example with Caddy's self-signed internal CA:
 
-```bash
-docker run -d --name logseq \
-  -p 8443:8080 \
-  -v logseq-data:/data \
-  -v /path/to/certs:/certs:ro \
-  -e TLS_CERT=/certs/fullchain.pem -e TLS_KEY=/certs/privkey.pem \
-  --restart unless-stopped \
-  logseq-selfhost
+```caddyfile
+logseq.home.lan {
+    tls internal
+    reverse_proxy 127.0.0.1:8080
+}
 ```
 
 First run: the app boots into a local Demo graph; create your own graph and it
