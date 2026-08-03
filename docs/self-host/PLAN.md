@@ -13,6 +13,14 @@ date: 2026-08-01
 > packaging (single-origin Docker, release build), first-run UX polish, and the
 > hardening in §10. So: the approach is proven, the product is not shipped.
 
+> **Status update (2026-08-03, later): Phase 4 implemented.** §10.1 (origin-default
+> sync URLs, single-origin server, Docker image), §10.2 (runbook: DEPLOY.md),
+> §10.3 (auto-upload of never-synced non-Demo graphs; auto-open = most recently
+> updated remote graph, fresh browsers only), and the §10.4 OPFS gate are built
+> and the A->B smoke passes against both the dev stack and the release
+> single-origin server. See START_HERE.md for the updated state; what remains of
+> §10.4/10.7 is measurement/robustness runs, not code.
+
 > **Currentness (FPF G.11).** Built and validated against tree edition
 > `9a11243d50` (upstream master, pnpm era). This tracks a moving upstream master
 > - C1 already shipped ahead of the plan and the e2ee gating changed under it, so

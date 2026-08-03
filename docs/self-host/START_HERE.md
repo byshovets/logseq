@@ -16,8 +16,24 @@ Branch **`byshovets/self-host-web-mvp`**, built against upstream edition
 3. `self-host: add plan, run script, and smoke test to the repo` (docs/scripts)
 4. `self-host: extract fork-owned namespace, minimize upstream edits` (refactor)
 
-The A->B end-to-end flow passes: create+edit in one browser -> a fresh browser
-auto-opens the graph and shows the edit.
+**Phase 4 (productionization, PLAN.md 10) is implemented on top:**
+- **10.1** single-origin release build: sync URLs default to the page origin in
+  self-host release builds (`config.cljs`), a stdlib-only Node server
+  (`scripts/self-host/single-origin-server.mjs`) serves `static/` + proxies the
+  adapter (incl. the `/sync/` WS upgrade), and a fork-owned Docker image
+  (`scripts/self-host/Dockerfile`) packages both. The stale root Dockerfile is
+  left untouched (upstream-owned; ours is separate by the PLAN.md 11 principle).
+- **10.2** deploy runbook with Pocket ID forward-auth at the proxy:
+  [DEPLOY.md](./DEPLOY.md).
+- **10.3** first-run gap closed: a never-synced (non-Demo) graph **auto-uploads**
+  on create/open; auto-open now picks the most recently updated remote graph and
+  only fires on a fresh browser (current graph nil/Demo). Demo graphs stay local
+  on purpose - every fresh browser makes its own local Demo, so syncing it would
+  collide.
+- **10.4** OPFS capability gate: unsupported browsers get an explicit error page.
+
+The A->B end-to-end flow passes: create a graph in one browser (no manual sync
+step) -> a fresh browser auto-opens the graph and shows the edit.
 
 ## Run it + verify (2 minutes)
 ```
@@ -38,16 +54,15 @@ node scripts/self-host/smoke-test.js     # A->B check; prints SMOKE PASS
   `deps/db-sync/.../worker/auth.cljs` + `node/server.cljs`. **`events/ui.cljs` is
   untouched.** Full rationale: PLAN.md 11.
 
-## What's next (Phase 4 productionization - PLAN.md 10, in order)
-1. **Single-origin release build + Docker** (10.1): `SELF_HOST=true pnpm run
-   release-app`; serve static + reverse-proxy the sync endpoints on one origin;
-   rewrite the stale root `Dockerfile` (yarn->pnpm); persistent volume =
-   `DB_SYNC_DATA_DIR`.
-2. **Pocket ID forward-auth at the VPS proxy** (10.2): the app stays no-auth; the
-   proxy does passkeys. Verify the WebSocket upgrade passes forward-auth.
-3. **First-run UX** (10.3): auto-open only fires once a remote graph exists; the
-   first graph still needs a manual "sync" - close that gap.
-4. **OPFS capability gate** (10.4) + re-measure at real graph size (10.7).
+## What's next
+1. **Deploy it** (ops-side, [DEPLOY.md](./DEPLOY.md)): home server container +
+   VPS Pocket ID forward-auth; verify the WS upgrade passes the auth gate on
+   the real proxy.
+2. **Robustness runs the code can't prove** (PLAN.md 10.4/10.7): re-measure at
+   real graph size, adapter-restart/reconnect behavior, the fork's
+   checksum-mismatch repro harness.
+3. **Decide CI**: the smoke test is CI-worthy but heavy (full build); wire it
+   as a manual/nightly job if wanted.
 
 ## Don't re-break these (PLAN.md 1b gotchas)
 - The self-host user-id **must be a UUID** (else search index + graph-switching
