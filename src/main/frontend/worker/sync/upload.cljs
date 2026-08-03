@@ -18,10 +18,8 @@
    [logseq.db.sqlite.util :as sqlite-util]
    [promesa.core :as p]))
 
-;; Compile-time self-host flag (wired in shadow-cljs.edn). The runtime
-;; `:self-host?` config key is fragile: `set-db-sync-config` replaces the whole
-;; worker config, and several main-thread producers push configs without the
-;; key, which would silently flip e2ee back on for later uploads.
+;; Compile-time self-host flag (wired in shadow-cljs.edn): survives the whole-
+;; config replacement in set-db-sync-config, which drops the runtime :self-host?
 (goog-define SELF-HOST false)
 
 (def upload-kvs-batch-size 500)

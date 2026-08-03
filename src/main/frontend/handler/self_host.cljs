@@ -344,11 +344,16 @@
       (state/set-user-info! {:UserGroups ["team"]})
       ;; What user-handler/set-tokens! does on the normal login path: without a
       ;; current login user, trigger-start-rtc-flow drops graph-switch/restore
-      ;; triggers and live sync never starts in the first session.
-      (reset! flows/*current-login-user
-              {:email (:email local-user)
-               :sub (:sub local-user)
-               :cognito:username (:username local-user)}))
+      ;; triggers and live sync never starts in the first session. The atom
+      ;; carries a schema validator, so guard against upstream schema drift
+      ;; breaking the whole init.
+      (try
+        (reset! flows/*current-login-user
+                {:email (:email local-user)
+                 :sub (:sub local-user)
+                 :cognito:username (:username local-user)})
+        (catch :default e
+          (log/error :self-host/set-login-user-failed e))))
     (-> (p/do!
          (state/pub-event! [:rtc/sync-app-state])
          (state/<invoke-db-worker :thread-api/set-db-sync-config

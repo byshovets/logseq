@@ -103,11 +103,15 @@ APP_URL_B=http://localhost:8080/ DB_SYNC_DATA_DIR=<data dir> node scripts/self-h
   (dev script, single-origin server, Dockerfile, smoke test), `docs/self-host/*`.
 - **Upstream files touched, all flag-gated (`SELF_HOST` / `DB_SYNC_DISABLE_AUTH`),
   inert by default:** `config.cljs` (the flag + origin-default sync URLs) +
-  `shadow-cljs.edn` (the flag), `handler.cljs` (a require + one-line boot hook),
-  tiny e2ee guards in `handler/db_based/sync.cljs` + `worker/sync/upload.cljs` +
-  `handler/events/rtc.cljs`, and the server seam in
+  `shadow-cljs.edn` (2 define lines: app + db-worker), `handler.cljs` (a require
+  + one-line boot hook), guards in `handler/db_based/sync.cljs` (e2ee, rsa-skip,
+  and the graph-identity check in `should-start-rtc?`) +
+  `worker/sync/upload.cljs` (e2ee via a compile-time define) +
+  `handler/events/rtc.cljs` (password prompt early-branch), additive
+  `:self-host/*` dict entries (`en`/`zh-CN`), and the server seam in
   `deps/db-sync/.../worker/auth.cljs` + `node/server.cljs`. **`events/ui.cljs`
-  and the root `Dockerfile` are untouched.** Full rationale: PLAN.md 11.
+  and the root `Dockerfile` are untouched.** Full rationale + the footprint
+  re-audit: PLAN.md 11.
 
 ## What's next
 1. **Deploy it** (ops-side, [DEPLOY.md](./DEPLOY.md)): home server container +

@@ -929,6 +929,30 @@ option-1 refactor) plus a rebase workflow.**
 touched by 1-3 stable, flag-gated lines each. No touch to `events/ui.cljs`; no
 touch to the churny sync/storage/checksum server files.
 
+**Footprint re-audit (2026-08-03, after the review rounds).** The accepted
+irreducible core grew from ~4 to 7 flag-gated touch points, each carrying a
+P1 correctness fix; everything stays inert-by-default and the biggest single
+inline edit is ~5 lines:
+- `config.cljs`: the SELF-HOST define (additive) + a 2-line body edit in each
+  of `db-sync-ws-url`/`db-sync-http-base` (origin default). These two fns
+  belong to the recently-shipped custom-sync-server feature - the churniest
+  region we touch; a conflict re-applies one `(or ...)` wrapper.
+- `handler/db_based/sync.cljs`: 3 guards - `normalize-graph-e2ee?` (e2ee off),
+  the rsa-ensure skip, and the `should-start-rtc?` graph-identity guard
+  (prevents name-based merging of unrelated graphs).
+- `worker/sync/upload.cljs`: the worker-side `normalize-graph-e2ee?` guard,
+  now backed by a compile-time `SELF-HOST` goog-define (additive block) so
+  whole-config replacements can't re-enable e2ee.
+- `handler.cljs` (require + 2-line hook), `handler/events/rtc.cljs` (e2ee
+  password early-branch), `shadow-cljs.edn` (2 additive define lines),
+  `deps/db-sync` `worker/auth.cljs` + `node/server.cljs` (the no-auth seam),
+  dicts `en`/`zh-CN` (additive `:self-host/*` entries) - all as designed.
+- **Semantic couplings inside the fork-owned namespace** (no git conflicts,
+  but rebase checkpoints): the `flows/*current-login-user` reset (the atom has
+  a schema validator - guarded by try/catch), the `:rtc/graphs` entry shape,
+  and `rtc-flows/logout-flow`. The A->B smoke test is the post-rebase net for
+  all of them.
+
 **Git workflow.** Track `upstream` (`github.com/logseq/logseq`) as a remote; keep
 the self-host delta as a small set of **atomic, labeled commits** (`server:
 DB_SYNC_DISABLE_AUTH`, `client: self-host mode`, `build: SELF_HOST flag`), with the
