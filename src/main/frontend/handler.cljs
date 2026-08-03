@@ -21,6 +21,7 @@
             [frontend.handler.events.export]
             [frontend.handler.events.rtc]
             [frontend.handler.events.ui]
+            [frontend.handler.self-host]
             [frontend.handler.graph :as graph-handler]
             [frontend.handler.global-config :as global-config-handler]
             [frontend.handler.page :as page-handler]

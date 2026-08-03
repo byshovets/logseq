@@ -44,24 +44,22 @@
     private-key-promise))
 
 (defmethod events/handle :rtc/request-e2ee-password [[_ {:keys [reason]}]]
-  (let [password-promise (p/deferred)
+  ;; Self-host runs e2ee-off; never prompt - answer with a fixed local password.
+  (if config/self-host?
+    (doto (p/deferred) (p/resolve! "logseq-self-host"))
+   (let [password-promise (p/deferred)
         decrypt-reason? (= :decrypt-user-rsa-private-key reason)]
-    ;; Self-host runs e2ee-off; never prompt - answer with a fixed local password
-    ;; so any residual RSA-key path completes non-interactively.
-    (if config/self-host?
-      (p/resolve! password-promise "logseq-self-host")
-      (do
-        (close-e2ee-blocking-ui!)
-        (shui/dialog-open!
-         #(if decrypt-reason?
-            (e2ee/e2ee-request-password password-promise)
-            (e2ee/e2ee-request-new-password password-promise))
-         {:auto-width? true
-          :content-props {:onPointerDownOutside #(.preventDefault %)}
-          :on-close (fn []
-                      (p/reject! password-promise (ex-info "cancelled" {}))
-                      (shui/dialog-close!))})))
-    password-promise))
+    (close-e2ee-blocking-ui!)
+    (shui/dialog-open!
+     #(if decrypt-reason?
+        (e2ee/e2ee-request-password password-promise)
+        (e2ee/e2ee-request-new-password password-promise))
+     {:auto-width? true
+      :content-props {:onPointerDownOutside #(.preventDefault %)}
+      :on-close (fn []
+                  (p/reject! password-promise (ex-info "cancelled" {}))
+                  (shui/dialog-close!))})
+    password-promise)))
 
 (defmethod events/handle :rtc/storage-exceed-limit [[_]]
   (notification/show! (t :sync/storage-exceed-limit) :warning false))
