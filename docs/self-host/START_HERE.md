@@ -30,15 +30,19 @@ Branch **`byshovets/self-host-web-mvp`**, built against upstream edition
   [DEPLOY.md](./DEPLOY.md).
 - **10.3** first-run gap closed: a graph without a ready remote counterpart
   **auto-uploads** on create/open (with bounded retry over a backend outage;
-  failures surface as an error notification). Interrupted uploads recover: a
-  not-ready server row **older than 30 minutes** is deleted and the upload
-  retried - the age gate exists because the ready bit alone cannot distinguish
-  an interrupted upload from one another tab/browser is running right now.
-  Auto-open picks the newest **ready** remote graph (by server metadata = most
-  recently added, not most recently edited; polls while all candidates are
-  still uploading) and only fires on a fresh browser (current graph nil/Demo).
-  Demo graphs stay local on purpose - every fresh browser makes its own local
-  Demo, so syncing it would collide.
+  failures surface as an error notification). Interrupted uploads recover
+  safely: a not-ready server row is deleted and re-uploaded **only when the
+  graph's persisted local RTC uuid matches the row** (only the browser that
+  started the upload holds that uuid, so other devices' rows are never
+  destroyed), and the whole check-recover-upload sequence runs under a
+  per-graph **Web Lock** so a concurrent upload in another tab is waited out,
+  not clobbered (the lock auto-releases if the tab dies - a liveness-safe
+  lease, unlike any age heuristic). Auto-open picks the newest **ready** remote
+  graph (by server metadata = most recently added, not most recently edited;
+  polls while all candidates are still uploading) and only fires on a fresh
+  browser (= no non-Demo graph in the local OPFS db list). Demo graphs stay
+  local on purpose - every fresh browser makes its own local Demo, so syncing
+  it would collide.
 - **10.4** storage capability gate: unsupported browsers and insecure origins
   (plain HTTP on non-localhost - OPFS needs a secure context) each get an
   explicit error page (verified by stripping `getDirectory` in a real browser).

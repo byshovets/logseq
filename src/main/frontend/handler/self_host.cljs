@@ -22,6 +22,7 @@
             [frontend.state :as state]
             [lambdaisland.glogi :as log]
             [logseq.common.config :as common-config]
+            [logseq.db :as ldb]
             [missionary.core :as m]
             [promesa.core :as p]))
 
@@ -94,10 +95,12 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- fresh-browser?
-  "True when this browser holds no user graph yet - boot auto-creates a local
-   Demo graph before :self-host/init runs, so Demo-or-nil means fresh."
-  [current-repo]
-  (or (nil? current-repo) (config/demo-graph? current-repo)))
+  "True when this browser's local OPFS db list holds no user graph - boot
+   auto-creates a local Demo, so Demo alone still counts as fresh. Deliberately
+   NOT keyed on the selected repo: a browser whose user graphs exist locally
+   keeps its state even when Demo happened to be the last-selected graph."
+  [local-dbs]
+  (empty? (remove #(config/demo-graph? (:name %)) local-dbs)))
 
 (defn- <self-host-auto-open!
   "On a fresh browser, download + open the newest READY remote graph so a new
@@ -106,16 +109,15 @@
    NOT on edits - so with several graphs this picks the most recently added
    one, not the most recently edited one. A not-ready graph is still being
    bootstrap-uploaded (downloading it would 409), so when only not-ready graphs
-   exist, poll for a while until the uploader finishes. A browser that already
-   holds a user graph keeps its last-used graph. Uses the actual local OPFS db
-   list (not get-repos, which also lists remote graphs)."
+   exist, poll for a while until the uploader finishes. Uses the actual local
+   OPFS db list (not get-repos, which also lists remote graphs)."
   []
-  (p/let [local-dbs (persist-db/<list-db)
-          local-urls (set (map :name local-dbs))]
-    (p/loop [attempt 0]
-      (let [graphs (state/get-rtc-graphs)
+  (p/loop [attempt 0]
+    (p/let [local-dbs (persist-db/<list-db)]
+      (let [local-urls (set (map :name local-dbs))
+            graphs (state/get-rtc-graphs)
             ready (filterv #(not= false (:graph-ready-for-use? %)) graphs)]
-        (when (fresh-browser? (state/get-current-repo))
+        (when (fresh-browser? local-dbs)
           (cond
             (seq ready)
             (let [{:keys [url GraphName GraphUUID GraphSchemaVersion graph-e2ee?]}
@@ -155,24 +157,35 @@
   [repo]
   (some #(when (= repo (:url %)) %) (state/get-rtc-graphs)))
 
-(def ^:private interrupted-upload-min-age-ms
-  "The server's ready bit alone cannot distinguish an interrupted upload from
-   one that is still in progress (another tab or browser bootstrap-uploading
-   right now). `updated-at` is written at row creation, so only a not-ready row
-   older than this is treated as interrupted and safe to recover."
-  (* 30 60 1000))
-
-(defn- interrupted-upload?
-  "True when `remote` is a not-ready graph row old enough that no live
-   bootstrap upload can plausibly still be writing it. The server creates the
-   row not-ready and flips it only after the final snapshot batch."
-  [remote]
+(defn- our-interrupted-upload?
+  "True when `remote` is a not-ready row created by THIS browser's own
+   interrupted upload: the graph's persisted local RTC uuid equals the remote
+   row's id. The uuid is written into the local db before the first snapshot
+   batch, so only the uploading browser ever holds it - a same-named row from
+   another device never matches and is never deleted (its upload attempt here
+   fails server-side with graph-already-exists and surfaces as a notification
+   instead). A row still being written by another tab of THIS browser is
+   excluded by the upload lock, not by this predicate."
+  [repo remote]
   (and (false? (:graph-ready-for-use? remote))
-       (number? (:updated-at remote))
-       (> (- (js/Date.now) (:updated-at remote)) interrupted-upload-min-age-ms)))
+       (some? (:GraphUUID remote))
+       (= (str (ldb/get-graph-rtc-uuid (db/get-db repo)))
+          (str (:GraphUUID remote)))))
+
+(defn- <with-graph-upload-lock
+  "Serialize recovery + upload per graph across this browser's tabs via the Web
+   Locks API - a liveness-safe lease: the lock is auto-released when the
+   holding tab dies, unlike any age/timestamp heuristic. Falls back to running
+   directly when the API is unavailable (the per-tab :rtc/uploading? guard
+   still applies)."
+  [repo thunk]
+  (if (and (exists? js/navigator) (.-locks js/navigator))
+    (js/navigator.locks.request (str "logseq-self-host-upload-" repo)
+                                (fn [_lock] (thunk)))
+    (thunk)))
 
 (defn- <delete-interrupted-remote-graph!
-  "Delete `repo`'s interrupted-upload leftover so the retry starts clean (a
+  "Delete `repo`'s own interrupted-upload leftover so the retry starts clean (a
    retried upload would otherwise fail with graph-already-exists)."
   [repo]
   (let [{:keys [GraphUUID GraphSchemaVersion]} (remote-counterpart repo)]
@@ -180,26 +193,6 @@
       (log/info :self-host/delete-interrupted-remote-graph {:repo repo :graph-uuid GraphUUID})
       (p/let [_ (rtc-handler/<rtc-delete-graph! GraphUUID GraphSchemaVersion)]
         (rtc-handler/<get-remote-graphs)))))
-
-(defn- <upload-graph-with-recovery!
-  "Upload `repo`, clearing an interrupted-upload leftover first. Failures are
-   surfaced to the user; the next open of the graph retries automatically."
-  [repo]
-  (-> (p/let [remote (remote-counterpart repo)
-              _ (when (interrupted-upload? remote)
-                  (<delete-interrupted-remote-graph! repo))]
-        ;; the delete round-trip may have outlived this graph being current
-        (when (= repo (state/get-current-repo))
-          (log/info :self-host/auto-upload-graph repo)
-          (rtc-handler/<rtc-upload-graph! repo false)))
-      (p/catch
-       (fn [e]
-         (log/error :self-host/auto-upload-failed {:repo repo :error e})
-         (notification/show!
-          (t :self-host/auto-upload-failed
-             (common-config/strip-leading-db-version-prefix repo)
-             (or (ex-message e) (str e)))
-          :error)))))
 
 (def ^:private remote-check-retry-delays-ms [5000 15000 45000])
 
@@ -220,6 +213,28 @@
                 (p/recur (inc attempt)))
                (throw e))))))))
 
+(defn- <recover-and-upload!
+  "The critical section run under the graph's upload lock: decide against a
+   fresh graph list, clear our own interrupted-upload leftover, upload. When
+   another tab's upload held the lock, the fresh fetch afterwards sees the row
+   flip to ready and this becomes a no-op."
+  [repo]
+  (p/let [_ (<fetch-remote-graphs-with-retry! repo)]
+    ;; re-check: the user may have switched graphs while waiting for the
+    ;; lock or the fetch
+    (when (= repo (state/get-current-repo))
+      (let [remote (remote-counterpart repo)]
+        (when (and (or (nil? remote)
+                       (false? (:graph-ready-for-use? remote)))
+                   (nil? (:rtc/downloading-graph-uuid @state/state))
+                   (not (true? (:rtc/uploading? @state/state))))
+          (p/let [_ (when (our-interrupted-upload? repo remote)
+                      (<delete-interrupted-remote-graph! repo))]
+            ;; the delete round-trip may have outlived this graph being current
+            (when (= repo (state/get-current-repo))
+              (log/info :self-host/auto-upload-graph repo)
+              (rtc-handler/<rtc-upload-graph! repo false))))))))
+
 (defn- <auto-upload-graph!
   "Sync `repo` to the self-host server when it has no ready remote counterpart:
    never-synced graphs upload, and interrupted uploads (old not-ready remote
@@ -239,23 +254,10 @@
       (if-not db-ready?
         (log/info :self-host/auto-upload-no-db-conn repo)
         (when (= repo (state/get-current-repo))
-          (-> (p/let [_ (<fetch-remote-graphs-with-retry! repo)]
-                ;; re-check: the user may have switched graphs during the fetch
-                (when (= repo (state/get-current-repo))
-                  (let [remote (remote-counterpart repo)]
-                    (cond
-                      (and (false? (:graph-ready-for-use? remote))
-                           (not (interrupted-upload? remote)))
-                      (log/info :self-host/auto-upload-deferred
-                                {:repo repo :reason :remote-upload-possibly-in-progress})
-
-                      (and (or (nil? remote) (interrupted-upload? remote))
-                           (nil? (:rtc/downloading-graph-uuid @state/state))
-                           (not (true? (:rtc/uploading? @state/state))))
-                      (<upload-graph-with-recovery! repo)))))
+          (-> (<with-graph-upload-lock repo #(<recover-and-upload! repo))
               (p/catch
                (fn [e]
-                 (log/error :self-host/auto-upload-check-failed {:repo repo :error e})
+                 (log/error :self-host/auto-upload-failed {:repo repo :error e})
                  (notification/show!
                   (t :self-host/auto-upload-failed
                      (common-config/strip-leading-db-version-prefix repo)
@@ -275,14 +277,19 @@
     flows/current-repo-flow)))
 
 ;; The db-worker needs OPFS, so without it boot fails before :self-host/init
-;; ever fires - surface the error page at namespace load (main.js is deferred,
-;; the DOM is ready by now). Insecure context is the usual cause: OPFS only
+;; ever fires - schedule the error page from namespace load. Rendering waits
+;; for boot (which runs i18n/start and detects the browser locale before the
+;; restore attempt settles app-ready-promise), with a timeout so the page still
+;; appears even if boot hangs. Insecure context is the usual cause: OPFS only
 ;; exists on HTTPS or localhost origins.
 (when (and config/self-host? (not (opfs-supported?)))
-  (show-storage-error-page!
-   (if (false? (.-isSecureContext js/window))
-     (t :self-host/insecure-context-error-body)
-     (t :self-host/opfs-error-body))))
+  (-> (p/race [state/app-ready-promise (p/delay 10000)])
+      (p/then
+       (fn [_]
+         (show-storage-error-page!
+          (if (false? (.-isSecureContext js/window))
+            (t :self-host/insecure-context-error-body)
+            (t :self-host/opfs-error-body)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Boot

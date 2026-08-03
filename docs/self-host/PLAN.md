@@ -725,12 +725,16 @@ Also: tighten the adapter's `Access-Control-Allow-Origin: *` to the deploy origi
 > over `current-repo-flow` + an init-time hook; upload via `<rtc-upload-graph!`,
 > e2ee off). Demo graphs deliberately stay local: every fresh browser creates
 > its own local Demo before `:self-host/init` runs, so syncing it would collide
-> with a remote Demo from another browser. Multi-graph auto-open defined: pick
-> the **newest** remote graph by the server's `:updated-at` - note this field
-> changes on graph creation and upload completion, NOT on edits, so it means
-> "most recently added", not "most recently edited" - and only on a **fresh
-> browser** (current graph nil/Demo) so a returning browser keeps its last-used
-> graph. Two implementation gotchas are recorded in
+> with a remote Demo from another browser. Interrupted-upload recovery is
+> identity-gated (local RTC uuid must match the not-ready row) and serialized
+> per graph across tabs via a Web Lock - see START_HERE for the full rule.
+> Multi-graph auto-open defined: pick
+> the **newest ready** remote graph by the server's `:updated-at` - note this
+> field changes on graph creation and upload completion, NOT on edits, so it
+> means "most recently added", not "most recently edited" - and only on a
+> **fresh browser** (no non-Demo graph in the local OPFS db list) so a
+> returning browser keeps its last-used graph. Two implementation gotchas are
+> recorded in
 > START_HERE ("Don't re-break these"): wait for the db conn (repo is set before
 > the conn registers), and consume the continuous repo-flow with a direct
 > `m/reduce`.
