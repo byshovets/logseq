@@ -1,0 +1,109 @@
+diff --git a/src/main/frontend/handler.cljs b/src/main/frontend/handler.cljs
+index 4f9890a139..204b2faced 100644
+--- a/src/main/frontend/handler.cljs
++++ b/src/main/frontend/handler.cljs
+@@ -21,6 +21,7 @@
+             [frontend.handler.events.export]
+             [frontend.handler.events.rtc]
+             [frontend.handler.events.ui]
++            [frontend.handler.editor :as editor-handler]
+             [frontend.handler.global-config :as global-config-handler]
+             [frontend.handler.page :as page-handler]
+             [frontend.handler.plugin :as plugin-handler]
+@@ -133,6 +134,7 @@
+     (set-global-error-notification!)
+ 
+     (register-components-fns!)
++    (editor-handler/install-durability-flush!)
+     (user-handler/restore-tokens-from-localstorage)
+     (user.login/setup-configure!)
+     (state/set-db-restoring! true)
+@@ -159,6 +161,7 @@
+                  _ (if (empty? repos)
+                      (repo-handler/new-db! config/demo-repo)
+                      (restore-and-setup! repo))]
++           (editor-handler/restore-unsaved-edit! (state/get-current-repo))
+            (set-network-watcher!)
+ 
+            (when (util/electron?)
+diff --git a/src/main/frontend/handler/editor.cljs b/src/main/frontend/handler/editor.cljs
+index 39ef078fdd..6f429663b5 100644
+--- a/src/main/frontend/handler/editor.cljs
++++ b/src/main/frontend/handler/editor.cljs
+@@ -1,6 +1,7 @@
+ (ns ^:no-doc frontend.handler.editor
+   (:require ["path" :as node-path]
+             [clojure.set :as set]
++            [clojure.edn :as edn]
+             [clojure.string :as string]
+             [clojure.walk :as w]
+             [dommy.core :as dom]
+@@ -1259,6 +1260,16 @@
+      (when (db/entity repo [:block/uuid (:block/uuid block)])
+        (save-block-aux! block value opts)))))
+ 
++(def ^:private recovery-key "logseq-editor-recovery")
++(defn- stash-recovery!
++  "Synchronously persist the in-flight edit value to localStorage so a hard crash
++  or accidental close before the block is transacted doesn't lose it."
++  [repo block value]
++  (when-let [uuid (:block/uuid block)]
++    (js/localStorage.setItem recovery-key
++                             (pr-str {:repo repo :uuid (str uuid) :value value}))))
++(defn clear-recovery! [] (js/localStorage.removeItem recovery-key))
++
+ (defonce *auto-save-timeout (atom nil))
+ (defn- clear-block-auto-save-timeout!
+   []
+@@ -1724,18 +1735,48 @@
+     (let [value (util/evalue e)
+           repo (state/get-current-repo)]
+       (state/set-edit-content! id value false)
++      (stash-recovery! repo block value)
+       (clear-block-auto-save-timeout!)
+       (block-handler/mark-last-input-time! repo)
+       (reset! *auto-save-timeout
+               (js/setTimeout
+                (fn []
+-                 (when (and (state/input-idle? repo :diff 450)
+-                          ;; don't auto-save block if it has tags
+-                            (not (re-find #"#\S+" value)))
++                 (when (state/input-idle? repo :diff 450)
+                    ; don't auto-save for page's properties block
+                    (save-current-block! {:skip-properties? true})))
+                450)))))
+ 
++(defonce ^:private *durability-flush-installed? (atom false))
++(defn install-durability-flush!
++  "Persist the block being edited when the page is hidden or unloaded, so an
++  accidental tab close / navigation doesn't drop in-flight text. This is
++  best-effort: the transact is an async worker round-trip that may not finish
++  before teardown, so it is backed by the synchronous localStorage recovery
++  buffer (see stash-recovery! / restore-unsaved-edit!)."
++  []
++  (when-not @*durability-flush-installed?
++    (reset! *durability-flush-installed? true)
++    (let [flush! (fn [] (save-current-block! {:skip-properties? true}))]
++      (.addEventListener js/document "visibilitychange"
++                         (fn [] (when (= "hidden" (.-visibilityState js/document)) (flush!))))
++      (.addEventListener js/window "pagehide" (fn [] (flush!))))))
++
++(defn restore-unsaved-edit!
++  "On boot, re-apply any in-flight edit value that was stashed before a crash and
++  never made it into the graph. Idempotent: clears the buffer once reconciled."
++  [repo]
++  (-> (p/let [raw (js/localStorage.getItem recovery-key)
++              {stash-repo :repo uuid-str :uuid value :value} (when raw (edn/read-string raw))]
++        (when (and raw (= stash-repo repo) (string? uuid-str) (string? value))
++          ;; DB graphs lazy-load blocks, so page the block in before applying.
++          (p/let [_ (db-async/<get-block repo (uuid uuid-str) {:children? false})
++                  block (db/entity [:block/uuid (uuid uuid-str)])]
++            (when (and block
++                       (not= (string/trim (or (:block/title block) "")) (string/trim value)))
++              (save-block-aux! block value {:skip-properties? true})))))
++      (p/finally (fn [_ _] (clear-recovery!)))
++      (p/catch (fn [e] (log/error :restore-unsaved-edit-failed e)))))
++
+ (defn- start-of-new-word?
+   [input pos]
+   (contains? #{" " "\t"} (get (.-value input) (- pos 2))))
