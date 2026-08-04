@@ -1,0 +1,9 @@
+{
+  "name": "logseq-self-host-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "better-sqlite3": "12.9.0",
+    "ws": "8.21.2"
+  }
+}

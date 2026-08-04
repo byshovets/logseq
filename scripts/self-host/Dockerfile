@@ -50,14 +50,18 @@ RUN test "$SELF_HOST" = true
 RUN SELF_HOST="$SELF_HOST" pnpm run release-app
 
 # db-sync Node adapter (the server-side database). --ignore-workspace keeps the
-# install local to deps/db-sync (the repo root is a pnpm workspace, which would
-# otherwise hoist everything to the root node_modules); the final --prod
-# re-install leaves a production-only node_modules for the runner stage.
+# build install local to deps/db-sync (the repo root is a pnpm workspace, which
+# would otherwise hoist everything to the root node_modules).
 RUN cd deps/db-sync && \
     pnpm install --frozen-lockfile --ignore-workspace --config.network-timeout=240000 && \
-    pnpm run build:node-adapter && \
-    rm -rf node_modules && \
-    pnpm install --frozen-lockfile --ignore-workspace --prod --config.network-timeout=240000
+    pnpm run build:node-adapter
+
+# Install only what the compiled Node adapter loads in self-host mode. The
+# db-sync package's production dependency list also contains build and
+# Cloudflare tooling (including shadow-cljs); none of it belongs in the runtime
+# image. A dedicated lockfile keeps this minimal install reproducible.
+COPY scripts/self-host/runtime/package*.json /runtime/
+RUN cd /runtime && npm ci --omit=dev && npm cache clean --force
 
 # CI-only target: serves an unoptimized build on :3001 for browser A in the
 # existing smoke-test.js. The default/final target remains the runtime below.
@@ -83,10 +87,16 @@ LABEL org.opencontainers.image.title="Logseq self-host" \
 
 WORKDIR /app
 
+# The service starts Node directly and never installs packages at runtime.
+# Remove npm/Corepack and their dependency trees from the final filesystem.
+RUN rm -rf /usr/local/lib/node_modules && \
+    rm -f /usr/local/bin/corepack /usr/local/bin/npm /usr/local/bin/npx \
+          /usr/local/bin/yarn /usr/local/bin/yarnpkg
+
 COPY --from=release-builder /build/static ./static
 COPY --from=release-builder /build/deps/db-sync/worker/dist/node-adapter.js ./deps/db-sync/worker/dist/node-adapter.js
-COPY --from=release-builder /build/deps/db-sync/package.json ./deps/db-sync/package.json
-COPY --from=release-builder /build/deps/db-sync/node_modules ./deps/db-sync/node_modules
+COPY --from=release-builder /runtime/package.json ./deps/db-sync/package.json
+COPY --from=release-builder /runtime/node_modules ./deps/db-sync/node_modules
 COPY --from=release-builder /build/scripts/self-host/single-origin-server.mjs ./scripts/self-host/single-origin-server.mjs
 
 # Named/anonymous volumes inherit this ownership. /app stays root-owned and
