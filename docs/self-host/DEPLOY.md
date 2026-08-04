@@ -34,12 +34,53 @@ office browser -> VPS (Pocket ID gate + reverse proxy) --WireGuard--> home serve
   IS the security model. Never expose the container port to the internet
   directly.
 
-## Build and run the image
+## Published image: deploy the digest, never a tag
+
+The dedicated CI workflow in [build-self-host.yml](../../.github/workflows/build-self-host.yml)
+publishes one `linux/amd64` image to `ghcr.io/byshovets/logseq`. It
+prints and uploads a reference in this form:
+
+```text
+ghcr.io/byshovets/logseq@sha256:<64 hex characters>
+```
+
+Copy that entire value into the Ansible variable used by the Quadlet/container.
+The `sha-<full commit>` tag is useful for discovery, but tags remain mutable
+registry pointers; the digest is the deployment identity. The workflow does not
+publish `latest`.
+
+The production container should retain the constraints exercised by CI:
+
+```bash
+podman run -d --name logseq \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777 \
+  --cap-drop all \
+  --security-opt no-new-privileges \
+  -p 127.0.0.1:8080:8080 \
+  -v logseq-data:/data:U \
+  ghcr.io/byshovets/logseq@sha256:<digest>
+```
+
+The image runs as the existing unprivileged `node` user. `/data` is the only
+persistent writable path; `/tmp` is a small ephemeral tmpfs and the image root
+is read-only. Podman's `:U` initializes/updates the named volume ownership for
+the container UID; use it only on the dedicated Logseq volume, never on a broad
+host bind mount.
+
+CI/GHCR setup, current GitHub Free limits, signatures, and Ansible examples are
+in [CI.md](./CI.md).
+
+## Build and run locally
 
 ```bash
 # repo root
-docker build -f scripts/self-host/Dockerfile -t logseq-selfhost .
+docker build --platform linux/amd64 -f scripts/self-host/Dockerfile -t logseq-selfhost .
 docker run -d --name logseq \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777 \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
   -p 8080:8080 \
   -v logseq-data:/data \
   --restart unless-stopped \
@@ -56,6 +97,13 @@ services:
       dockerfile: scripts/self-host/Dockerfile
     ports:
       - "8080:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - logseq-data:/data
     restart: unless-stopped

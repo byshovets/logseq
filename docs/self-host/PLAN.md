@@ -12,9 +12,10 @@ date: 2026-08-01
 > §1b records the MVP as-built requirements, seams, and gotchas; §10 records the
 > productionization as-built: origin-default sync URLs, the single-origin server,
 > the Docker image (container-verified), auto-upload of the first graph, the OPFS
-> gate, and the DEPLOY.md runbook. What remains is **not code**: deploying it
-> (DEPLOY.md), and the §10.4/§10.7 measurement/robustness runs (real graph size,
-> adapter-restart behavior, checksum repro) plus the §10.5 CI decision.
+> gate, the hardened image CI, and the DEPLOY.md/CI.md runbooks. What remains is
+> **not code**: enabling CI and deploying it on the owned infrastructure, plus
+> the §10.4/§10.7 measurement/robustness runs (real graph size, adapter-restart
+> behavior, checksum repro).
 
 > **Currentness (FPF G.11).** Built and validated against tree edition
 > `9a11243d50` (upstream master, pnpm era). This tracks a moving upstream master
@@ -617,11 +618,12 @@ Findings:
   no-auth session). Done and validated.
 - Phase 3 - auto-open the synced graph + e2ee off. Done and validated.
 
-**Phase 4 - productionize: DONE (2026-08-03).** Release build with `SELF_HOST`,
-single-origin server + Docker image (container-verified), first-run auto-upload,
-OPFS gate, deploy runbook (DEPLOY.md), committed. The per-item as-built record
-is §10; still open there: actually deploying (ops-side), the measurement runs
-(§10.4/§10.7), and the CI decision (§10.5).
+**Phase 4 - productionize: DONE in tree (2026-08-04).** Release build with
+`SELF_HOST`, single-origin server + hardened Docker image, first-run auto-upload,
+OPFS gate, build/test/scan/sign/publish CI, and deploy/CI runbooks are implemented.
+The per-item as-built record is §10; still open there: the first GitHub workflow
+run and deployment on the owned infrastructure, plus the measurement runs
+(§10.4/§10.7).
 
 **Phase 5 (separate concern) - editor durability.** The measured patch (§7b),
 independent of self-hosting. Not on the critical path.
@@ -631,9 +633,11 @@ independent of self-hosting. Not on the critical path.
 ## 10. Path to production (from the working MVP)
 
 > **As-built status (2026-08-03):** 10.1, 10.2 (runbook side), 10.3, and the
-> OPFS gate of 10.4 are **DONE and verified**; each item below carries a DONE
-> banner with what actually shipped. Still open: the 10.4 measurement/robustness
-> runs, 10.7 re-measurement at real graph size, and the 10.5 CI decision.
+> OPFS gate of 10.4 and the 10.5 image CI are **DONE in tree**; each item below
+> carries a DONE banner with what actually shipped. The workflow has passed
+> static validation but its first GitHub-hosted build is still open, along with
+> package setup, the 10.4 measurement/robustness runs, and 10.7 re-measurement at
+> real graph size.
 
 ### 10.1 Single-origin release build + Docker image (the core packaging)
 
@@ -769,9 +773,13 @@ multiple graphs (open last-used; let the user pick).
   plaintext behind the proxy - lean on the proxy + disk encryption.
 - **Commit + CI.** Commit **DONE** (seven atomic commits, START_HERE.md lists
   them); the smoke test ships in-repo (`scripts/self-host/smoke-test.js`, now
-  also covering auto-upload and a release-build browser B). Still open: whether
-  to wire it into CI (it needs a full build - manual/nightly job material) and
-  whether to propose the flag-gated mode upstream (§11).
+  also covering auto-upload and a release-build browser B). Image CI is now
+  wired in `.github/workflows/build-self-host.yml`: amd64-only, full-history
+  `SELF_HOST` build, hardened runtime + `/health` + A-to-B/live smoke, Trivy
+  gate, SPDX SBOM, signed provenance, keyless Cosign signing, commit tag, and
+  digest record. GitHub-side enablement/public-package choice remains ops work;
+  [CI.md](./CI.md) is the runbook. Proposing the flag-gated mode upstream (§11)
+  remains optional.
 
 ### 10.6 Explicit non-goals for v1 (unchanged from the MVP)
 Multi-user / access control (delegated to the proxy), simultaneous same-graph

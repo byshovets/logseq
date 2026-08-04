@@ -87,8 +87,9 @@ PORT=8080 DB_SYNC_DATA_DIR=/path/to/data node scripts/self-host/single-origin-se
 
 Docker image (repo root):
 ```
-docker build -f scripts/self-host/Dockerfile -t logseq-selfhost .
-docker run -p 8080:8080 -v logseq-data:/data logseq-selfhost
+docker build --platform linux/amd64 -f scripts/self-host/Dockerfile -t logseq-selfhost .
+docker run --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+  -p 8080:8080 -v logseq-data:/data logseq-selfhost
 ```
 
 Release smoke (dev app as browser A, release server as browser B, one adapter -
@@ -123,8 +124,9 @@ APP_URL_B=http://localhost:8080/ DB_SYNC_DATA_DIR=<data dir> node scripts/self-h
 2. **Robustness runs the code can't prove** (PLAN.md 10.4/10.7): re-measure at
    real graph size, adapter-restart/reconnect behavior, the fork's
    checksum-mismatch repro harness.
-3. **Decide CI**: the smoke test is CI-worthy but heavy (full build); wire it
-   as a manual/nightly job if wanted.
+3. **Enable image CI on GitHub**: the dedicated amd64 build/test/scan/sign/push
+   workflow is implemented. Follow [CI.md](./CI.md), run it once, make the GHCR
+   package public if desired, then deploy the recorded `image@sha256:...` value.
 
 ## Don't re-break these (PLAN.md 1b gotchas)
 - The self-host user-id **must be a UUID** (else search index + graph-switching

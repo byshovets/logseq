@@ -12,6 +12,9 @@ adapter, no in-app auth, reached from any browser).
   agent: what's done, what's next, and how to run/verify.
 - **[DEPLOY.md](./DEPLOY.md)** - the production runbook: Docker image, data
   volume/backups, Pocket ID forward-auth at the proxy, browser requirements.
+- **[CI.md](./CI.md)** - GitHub Actions/GHCR setup, free-plan limits,
+  digest-only deployment, signing and attestation verification, and private
+  registry credentials.
 
 Related tooling lives in [`../../scripts/self-host/`](../../scripts/self-host/):
 `dev-selfhost.sh` (run the local dev stack), `single-origin-server.mjs` (the

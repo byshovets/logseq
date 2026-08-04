@@ -16,6 +16,8 @@
 //                     WITHOUT its own adapter, and let the single-origin server
 //                     own :8787 so both origins share one database.
 //   DB_SYNC_DATA_DIR  default <repo>/.selfhost-data  (must match the adapter's)
+//   SMOKE_MODULES_DIR directory containing the Playwright and better-sqlite3
+//                     dependencies; default <repo> (CI uses an isolated install)
 //
 // Exit code 0 = pass, 1 = fail. Uses the repo's own playwright + system Chrome.
 // Browser A drives internal APIs, so APP_URL must be a dev (watch) build;
@@ -25,8 +27,9 @@ const os = require('os');
 const fs = require('fs');
 
 const ROOT = path.join(__dirname, '..', '..');
-const { chromium } = require(require.resolve('playwright', { paths: [ROOT] }));
-const Database = require(require.resolve('better-sqlite3', { paths: [ROOT] }));
+const MODULES_DIR = process.env.SMOKE_MODULES_DIR || ROOT;
+const { chromium } = require(require.resolve('playwright', { paths: [MODULES_DIR] }));
+const Database = require(require.resolve('better-sqlite3', { paths: [MODULES_DIR] }));
 
 const APP = process.env.APP_URL || 'http://localhost:3001/index.html';
 const APP_B = process.env.APP_URL_B || APP;
