@@ -133,8 +133,15 @@ jobs:
           docker run --detach --name "$DEV_CONTAINER" \
             --network host \
             "$DEV_IMAGE"
+          # Shadow CLJS's dev server exposes index.html before the application
+          # and worker compilers finish. Wait for every browser boot artifact;
+          # otherwise Playwright opens an inert page while compilation is still
+          # running and times out before #main-content-container can exist.
           for attempt in $(seq 1 120); do
-            if curl --fail --silent http://127.0.0.1:3001/index.html >/dev/null; then
+            if curl --fail --silent --output /dev/null http://127.0.0.1:3001/index.html && \
+               curl --fail --silent --output /dev/null http://127.0.0.1:3001/static/js/main.js && \
+               curl --fail --silent --output /dev/null http://127.0.0.1:3001/static/js/db-worker.js && \
+               curl --fail --silent --output /dev/null http://127.0.0.1:3001/static/js/db-worker-bundle.js; then
               break
             fi
             if [ "$attempt" = 120 ]; then
