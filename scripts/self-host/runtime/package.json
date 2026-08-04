@@ -4,6 +4,7 @@
   "private": true,
   "dependencies": {
     "better-sqlite3": "12.9.0",
+    "mldoc": "1.5.9",
     "ws": "8.21.2"
   }
 }
