@@ -29,7 +29,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Take Node from the separately pinned official image instead of executing the
 # NodeSource repository bootstrap script during the build.
 COPY --from=node-base /usr/local/ /usr/local/
-RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
+# The official Node image's yarn links target /opt, which is deliberately not
+# copied into this build stage. Enable only the package manager Logseq uses so
+# Corepack does not attempt to resolve those unrelated dangling links.
+RUN corepack enable pnpm && corepack prepare pnpm@10.33.0 --activate
 
 WORKDIR /build
 
