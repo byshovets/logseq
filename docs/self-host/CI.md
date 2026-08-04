@@ -23,8 +23,8 @@ so Renovate/Dependabot or a manual review can identify intended upgrades.
 ## Enable it on GitHub
 
 1. Push this branch and workflow to `github.com/byshovets/logseq`. The automatic
-   trigger is currently `byshovets/self-host`; change `on.push.branches` if the
-   production branch changes.
+   trigger is currently `master`; change `on.push.branches` if the production
+   branch changes.
 2. In **Settings -> Actions -> General**, enable Actions and allow the actions
    used by the workflow. No personal publish token is needed: the job grants its
    short-lived `GITHUB_TOKEN` `packages: write` and grants `id-token: write` only

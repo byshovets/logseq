@@ -223,16 +223,17 @@
    Rejects after the last attempt; stops early when `repo` is no longer
    current."
   [repo]
-  (p/loop [attempt 0]
-    (-> (rtc-handler/<get-remote-graphs)
-        (p/catch
-         (fn [e]
-           (let [delay-ms (get remote-check-retry-delays-ms attempt)]
-             (if (and delay-ms (= repo (state/get-current-repo)))
-               (p/do!
-                (p/delay delay-ms)
-                (p/recur (inc attempt)))
-               (throw e))))))))
+  (letfn [(fetch! [attempt]
+            (-> (rtc-handler/<get-remote-graphs)
+                (p/catch
+                 (fn [error]
+                   (let [delay-ms (get remote-check-retry-delays-ms attempt)]
+                     (if (and delay-ms (= repo (state/get-current-repo)))
+                       (p/do!
+                        (p/delay delay-ms)
+                        (fetch! (inc attempt)))
+                       (throw error)))))))]
+    (fetch! 0)))
 
 (defn- <recover-and-upload!
   "The critical section run under the graph's upload lock: decide against a
@@ -375,4 +376,3 @@
              (<auto-upload-graph! current-repo)))
          (<self-host-auto-open!))
         (p/catch (fn [e] (log/error :self-host/init-failed e))))))
-
