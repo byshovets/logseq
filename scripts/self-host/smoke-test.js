@@ -51,6 +51,20 @@ function graphStats() {
   }).filter(Boolean);
 }
 
+async function graphSyncState(page) {
+  return page.evaluate((graphName) => {
+    const graphs = cljs.core.clj__GT_js(frontend.state.get_rtc_graphs());
+    const rtc = cljs.core.clj__GT_js(
+      frontend.state.get_state(cljs.core.keyword('rtc', 'state')),
+    );
+    const remote = graphs.find((graph) => graph.GraphName === graphName);
+    return {
+      remoteReady: remote?.['graph-ready-for-use?'] === true,
+      wsState: rtc?.['rtc-state']?.['ws-state'] || null,
+    };
+  }, GRAPH);
+}
+
 async function boot(ctx, url) {
   const page = ctx.pages()[0] || (await ctx.newPage());
   await page.goto(url, { waitUntil: 'load', timeout: 90000 });
@@ -73,8 +87,18 @@ async function boot(ctx, url) {
   await A.evaluate((g) => frontend.handler.repo.new_db_BANG_(g), GRAPH);
   for (let i = 0; i < 20; i++) { await A.waitForTimeout(1000); const r = await A.evaluate(() => frontend.state.get_current_repo()); if (r && r.includes(GRAPH)) break; }
   // No manual sync: creating/opening a never-synced graph auto-uploads it.
-  for (let i = 0; i < 45 && !graphStats().length; i++) await A.waitForTimeout(1000);
-  if (!graphStats().length) throw new Error('graph did not auto-upload to the server');
+  // The server creates db.sqlite before the snapshot finishes. Wait for the
+  // remote ready flag and RTC connection so an edit cannot race ahead of its
+  // parent entities in the bootstrap snapshot.
+  let syncState;
+  for (let i = 0; i < 90; i++) {
+    await A.waitForTimeout(1000);
+    syncState = await graphSyncState(A);
+    if (graphStats().length && syncState.remoteReady && syncState.wsState === 'open') break;
+  }
+  if (!graphStats().length || !syncState?.remoteReady || syncState.wsState !== 'open') {
+    throw new Error('graph did not finish auto-upload and RTC startup: ' + JSON.stringify(syncState));
+  }
 
   await A.evaluate((marker) => {
     const today = frontend.date.today();
